@@ -1,0 +1,41 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+venv/
+
+# Checkpoints and large files
+*.pth
+*.pt
+*.ckpt
+checkpoints/
+outputs/
+results/
+
+# Data
+*.nii
+*.nii.gz
+*.dcm
+data/raw/
+data/processed/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# LaTeX artifacts
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.toc
+docs/*.synctex.gz
+docs/*.fls
+docs/*.fdb_latexmk
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

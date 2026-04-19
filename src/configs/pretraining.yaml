@@ -1,0 +1,21 @@
+# SparK pretraining configuration
+data_root:       "/kaggle/input/medical-segmentation-decathlon"
+output_dir:      "/kaggle/working/checkpoints/pretrain"
+
+# Model
+channels:        [32, 64, 128, 256, 512]
+strides:         [2, 2, 2, 2]
+
+# SparK masking
+spark_patch_size: 16
+mask_ratio:       0.75
+
+# Training
+epochs:          100
+batch_size:      2
+lr:              1.0e-4
+weight_decay:    0.05
+patch_size:      96
+num_workers:     2
+cache_rate:      0.05
+save_every:      20

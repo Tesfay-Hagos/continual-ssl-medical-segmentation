@@ -1,0 +1,773 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\begin{document}
+
+\title{Continual Self-Supervised Learning for Medical Image Segmentation:\\
+A Simplified Framework Without Federated Components}
+
+\author{\IEEEauthorblockN{[Your Names]}
+\IEEEauthorblockA{\textit{Advanced Programming for Artificial Intelligence}\\
+\textit{University Name}\\
+Email: [your.email@university.edu]}
+}
+
+\maketitle
+
+\begin{abstract}
+We present a centralized continual self-supervised learning framework for multi-organ medical image segmentation. Sequentially trained segmentation models suffer from two compounding problems: scarcity of dense pixel-level annotations and catastrophic forgetting of previously learned organs. Existing work either addresses these problems in isolation or, as in the federated approach of FedCSL~\cite{fedcsl2025}, requires distributed infrastructure unavailable in most clinical settings. We propose a simplified, single-institution framework that combines SparK-based sparse masked pretraining on a U-Net encoder with three continual learning regularizers—Elastic Weight Consolidation (EWC), Learning without Forgetting (LwF), and Experience Replay—evaluated sequentially on Liver, Pancreas, and Heart segmentation tasks from the Medical Segmentation Decathlon~\cite{simpson2022decathlon}. Beyond comparing strategies, we investigate a novel question: whether self-supervised pretraining acts as an implicit regularizer against catastrophic forgetting, independently of the explicit continual learning strategy applied. Our experiments provide the first systematic analysis of this interaction in the medical segmentation setting.
+
+\textbf{Code:} [To be released upon acceptance]
+\end{abstract}
+
+% ======================================================================
+\section{Introduction}
+% ======================================================================
+
+\subsection{Problem Setting}
+
+Medical image segmentation is central to clinical workflows ranging from tumour delineation to organ-at-risk contouring in radiotherapy planning. Deep learning models, particularly U-Net~\cite{ronneberger2015unet} and its successors~\cite{isensee2021nnunet}, have achieved expert-level performance when abundant annotated data are available. In practice, however, dense pixel-level annotation of volumetric medical images is expensive and clinically demanding—a single CT volume may require hours of expert delineation per organ. As a result, most institutions have access to only a few dozen labelled scans per anatomy, far below the thousands required to train models from scratch.
+
+A second, independent challenge arises when a model must be deployed across multiple organs or anatomical tasks sequentially. Standard fine-tuning on a new task causes \emph{catastrophic forgetting}~\cite{kirkpatrick2017ewc}: the model's weights shift to accommodate the new task at the expense of previously learned tasks, with performance on earlier tasks degrading sharply. The clinical implication is severe—a model trained incrementally to segment liver, then pancreas, then cardiac structures cannot be trusted to maintain accuracy on liver after the later tasks are added.
+
+These two problems—label scarcity and catastrophic forgetting—compound each other. A model that cannot leverage unlabelled data requires more costly annotation; a model that cannot retain knowledge across tasks requires retraining from scratch whenever a new anatomy is added. Solving them jointly is therefore both a scientific challenge and a practical necessity.
+
+\subsection{Prior Work and its Limitations}
+
+\textbf{Self-supervised pretraining} reduces annotation dependency by learning representations from unlabelled images. Masked image modeling (MIM), popularised by MAE~\cite{he2022mae}, has recently been adapted to medical imaging with strong results~\cite{xie2024rethinking,qi2024gmim,xing2024hybridmim,lyu2025masked,tang2026hiendmae}. These methods pretrain encoders that, when fine-tuned with a small labelled set, match or exceed fully supervised baselines. However, all existing medical MIM works study \emph{single-task} fine-tuning; none investigate whether the pretrained representations also help when the model must learn sequentially.
+
+\textbf{Continual learning} addresses catastrophic forgetting through regularization-based approaches such as EWC~\cite{kirkpatrick2017ewc} and LwF~\cite{li2016lwf}, which penalize changes to weights or predictions important to prior tasks, and through memory-based approaches such as Gradient Episodic Memory (GEM)~\cite{lopezpaz2017gem} and Experience Replay, which store and rehearse a small subset of previous task data. These methods were developed largely in the classification setting; their application to medical \emph{segmentation} remains limited. MOSInversion~\cite{kim2025mosinversion} applies knowledge-distillation-based incremental learning to organ segmentation but uses fully supervised training throughout—there is no self-supervised pretraining component. Yang et al.~\cite{yang2025continual} study continual domain adaptation for nasopharyngeal carcinoma segmentation but address domain shift rather than sequential task learning and do not incorporate self-supervised pretraining.
+
+\textbf{Federated continual self-supervised learning.} FedCSL~\cite{fedcsl2025} is the most complete prior work: it combines masked image modeling, continual learning, and federated training across multiple clients. Its cross-incremental collaborative distillation mechanism achieves strong results on multi-task medical segmentation. However, the federated infrastructure—multiple clients, communication rounds, privacy-preserving aggregation—is unavailable at most single institutions and introduces significant implementation complexity. No work has examined whether the \emph{centralized} combination of SSL pretraining and continual learning already captures the primary performance gains, making federation optional rather than essential.
+
+\subsection{Our Approach and Contributions}
+
+We close this gap with a minimal, reproducible framework that strips federated components from the SSL + CL paradigm while retaining its core benefits. Concretely, we pretrain a U-Net encoder using SparK~\cite{tian2023spark}—a sparse masked autoencoding method designed for convolutional networks—on the unlabelled partitions of the Medical Segmentation Decathlon. We then evaluate three continual learning strategies (EWC, LwF, Experience Replay) during sequential fine-tuning on Liver (CT), Pancreas (CT), and Heart (MRI) segmentation.
+
+Our contributions are:
+
+\begin{enumerate}
+    \item \textbf{First centralized SSL + CL benchmark for multi-organ segmentation.} We provide a clean experimental comparison of three continual learning strategies with and without SparK pretraining, establishing baselines for future work that need not adopt federated infrastructure.
+    \item \textbf{SSL as an implicit anti-forgetting regularizer.} We test whether a SparK-pretrained encoder forgets less than a randomly initialized encoder under identical CL strategies—an interaction not studied in any prior work.
+    \item \textbf{Systematic ablation on Medical Decathlon.} We report Dice, HD95, Backward Transfer (BWT), and Forgetting Measure across all task orderings, providing a reusable benchmark on three publicly available CT/MRI datasets.
+    \item \textbf{Open-source implementation.} All code, pretrained weights, and experiment configurations will be released to support reproducibility.
+\end{enumerate}
+
+\subsection{Research Questions}
+
+\begin{enumerate}
+    \item[\textbf{RQ1}] Does SparK-based self-supervised pretraining on unlabelled CT volumes significantly improve segmentation Dice on limited labelled data compared to supervised-only training?
+    \item[\textbf{RQ2}] Among EWC, LwF, and Experience Replay, which continual learning strategy best preserves performance on previously learned organs during sequential multi-organ training?
+    \item[\textbf{RQ3}] Does SSL pretraining act as an implicit regularizer against catastrophic forgetting—does a SparK-pretrained encoder exhibit lower forgetting than a randomly initialized encoder under the same CL strategy?
+    \item[\textbf{RQ4}] What is the minimum Experience Replay buffer size at which replay matches the multi-task learning upper bound within 5\% Dice?
+\end{enumerate}
+
+% ======================================================================
+\section{Related Work}
+% ======================================================================
+
+\subsection{Medical Image Segmentation}
+
+The U-Net architecture~\cite{ronneberger2015unet}, with its encoder–decoder structure and skip connections, established the template for volumetric medical image segmentation and remains the dominant backbone a decade after its introduction. nnU-Net~\cite{isensee2021nnunet} extended this foundation with automatic configuration of preprocessing, architecture, and training hyperparameters, achieving state-of-the-art results across ten tasks of the Medical Segmentation Decathlon~\cite{simpson2022decathlon} without manual tuning. These works establish the supervised upper bound against which we compare our continual learning framework.
+
+\subsection{Self-Supervised Learning for Medical Images}
+
+The success of Masked Autoencoders (MAE)~\cite{he2022mae} in natural image pretraining—reconstructing randomly masked patches with a high masking ratio to force holistic understanding—has motivated a wave of adaptations to medical imaging. Xie et al.~\cite{xie2024rethinking} identified that standard random masking is suboptimal for medical images because informative structures (organ boundaries, tumour regions) occupy a small spatial fraction; their structure-aware masking significantly improves downstream segmentation. Qi et al.~\cite{qi2024gmim} proposed Grouped MIM (GMIM), grouping nearby patches before masking to better preserve anatomical context in 3D volumes. Xing et al.~\cite{xing2024hybridmim} combined pixel- and feature-level reconstruction targets in a hybrid MIM objective that captures both low-level texture and high-level semantics. Lyu et al.~\cite{lyu2025masked} applied deformation-field prediction as an auxiliary MIM task for volumetric brain MRI, showing that geometric self-supervision improves both registration and segmentation. Tang et al.~\cite{tang2026hiendmae} proposed Hi-End-MAE, a hierarchical encoder-driven variant achieving top performance across multiple medical imaging benchmarks.
+
+A critical limitation shared by all these works is that they evaluate pretraining only in the \emph{single-task} fine-tuning regime: pretrain once, fine-tune on one labelled dataset. Whether pretrained representations transfer to a \emph{continual} multi-task setting—and whether they mitigate forgetting—is unexplored.
+
+Our work adopts SparK~\cite{tian2023spark} rather than ViT-based MAE because SparK applies sparse masked modeling directly to convolutional networks, eliminating the need for ViT architectures and the associated GPU memory overhead of processing full 3D volumes. SparK achieves 145 citations since its ICLR 2023 publication, validating its effectiveness for CNN pretraining.
+
+\subsection{Continual Learning}
+
+Catastrophic forgetting—the tendency of neural networks to lose previously acquired knowledge when trained on new tasks—was characterised by McCloskey and Cohen (1989) and remains an active research challenge. Modern continual learning methods fall into three families:
+
+\textbf{Regularization-based} methods add penalty terms to the loss to protect weights important for prior tasks. EWC~\cite{kirkpatrick2017ewc} computes the Fisher information matrix to identify and selectively consolidate critical weights, achieving over 9{,}500 citations as a foundational contribution. LwF~\cite{li2016lwf} instead uses knowledge distillation to preserve soft output predictions on prior tasks during new-task training, requiring no storage of past data.
+
+\textbf{Memory-based} methods store a small episodic buffer of prior task examples and replay them during new-task training. GEM~\cite{lopezpaz2017gem} uses the stored examples to project new-task gradient updates to avoid increasing prior task losses. Experience Replay, the simplest variant, uniformly samples from the buffer at each training step.
+
+\textbf{Architecture-based} methods grow or partition the network for each new task, avoiding interference entirely at the cost of parameter growth.
+
+In the medical imaging domain, continual learning has received growing attention~\cite{kim2025mosinversion,yang2025continual} but remains less studied than in the natural image classification setting, and its combination with self-supervised pretraining has not been examined.
+
+\subsection{Intersection: SSL Pretraining and Continual Learning in Medical Imaging}
+
+FedCSL~\cite{fedcsl2025} is the most directly related work. It proposes a federated cross-incremental SSL framework where clients collaboratively pretrain encoders using round-robin distributed masked image modeling and fine-tune sequentially using a cross-incremental collaborative distillation (CCD) mechanism. FedCSL demonstrates that combining SSL pretraining with continual learning reduces forgetting and improves data efficiency compared to supervised continual learning alone. However, it requires federated infrastructure and evaluates only the combined system—it does not isolate the contribution of SSL pretraining to anti-forgetting.
+
+MOSInversion~\cite{kim2025mosinversion} addresses incremental organ segmentation through a knowledge-distillation-based inversion mechanism that reconstructs feature statistics of previous tasks without storing raw data. It is the closest centralized alternative to FedCSL but relies entirely on supervised training; there is no self-supervised pretraining component and no explicit comparison of CL strategies.
+
+Yang et al.~\cite{yang2025continual} study continual source-free domain adaptation for nasopharyngeal carcinoma segmentation, showing that active selection of informative samples enables sequential domain transfer without catastrophic forgetting. While related in spirit, their setting addresses covariate shift across domains rather than semantic task shift across organs.
+
+\textbf{The gap we address.} No existing work systematically evaluates centralized SSL pretraining combined with standard CL regularizers for sequential multi-organ segmentation, and no work asks whether the pretrained representation itself reduces forgetting. We fill both gaps with a clean, reproducible experimental framework on the Medical Segmentation Decathlon.
+
+\section{Methodologies}
+
+Our framework combines three APAI-approved methodologies to create a comprehensive solution for medical image segmentation with limited annotations.
+
+\subsection{Self-Supervised Learning}
+
+\subsubsection{Masked Image Modeling (MIM)}
+
+We employ masked image modeling as our primary self-supervised pre-training strategy. The approach works as follows:
+
+\begin{enumerate}
+    \item \textbf{Masking Strategy}: Randomly mask patches of input medical images (e.g., 75\% masking ratio)
+    \item \textbf{Reconstruction Task}: Train an encoder-decoder network to reconstruct the masked regions
+    \item \textbf{Feature Learning}: The encoder learns robust visual representations that capture anatomical structures
+\end{enumerate}
+
+\textbf{Implementation Details}:
+\begin{itemize}
+    \item Patch size: 16×16 pixels
+    \item Masking ratio: 75\%
+    \item Reconstruction loss: Mean Squared Error (MSE) or L1 loss
+    \item Architecture: Vision Transformer (ViT) or U-Net based encoder-decoder
+\end{itemize}
+
+\subsubsection{Contrastive Learning (Optional)}
+
+As an alternative or complement to MIM, we may explore contrastive learning approaches:
+\begin{itemize}
+    \item Create positive pairs through data augmentation
+    \item Maximize agreement between different views of the same image
+    \item Use InfoNCE loss or similar contrastive objectives
+\end{itemize}
+
+\subsection{Continual Learning}
+
+\subsubsection{Problem Formulation}
+
+In continual learning, we train the model sequentially on $T$ tasks:
+\begin{equation}
+\mathcal{T} = \{\mathcal{T}_1, \mathcal{T}_2, \ldots, \mathcal{T}_T\}
+\end{equation}
+
+where each task $\mathcal{T}_t$ corresponds to segmenting a different organ or anatomical structure. The goal is to maintain performance on previous tasks while learning new ones.
+
+\subsubsection{Catastrophic Forgetting Prevention}
+
+We will implement and compare multiple continual learning strategies:
+
+\begin{enumerate}
+    \item \textbf{Elastic Weight Consolidation (EWC)}:
+    \begin{equation}
+    \mathcal{L}_{EWC} = \mathcal{L}_t + \sum_i \frac{\lambda}{2} F_i (\theta_i - \theta_{i,t-1}^*)^2
+    \end{equation}
+    where $F_i$ is the Fisher information matrix and $\theta_{i,t-1}^*$ are the optimal parameters from the previous task.
+    
+    \item \textbf{Learning Without Forgetting (LwF)}:
+    Use knowledge distillation to preserve predictions on previous tasks:
+    \begin{equation}
+    \mathcal{L}_{LwF} = \mathcal{L}_t + \alpha \sum_{j<t} \mathcal{L}_{KD}(y_j^{old}, y_j^{new})
+    \end{equation}
+    
+    \item \textbf{Experience Replay}:
+    Store a small subset of examples from previous tasks and replay them during training on new tasks.
+    
+    \item \textbf{Progressive Neural Networks}:
+    Add new network columns for each task while freezing previous columns.
+\end{enumerate}
+
+\subsection{Knowledge Distillation (Optional)}
+
+To create efficient models for deployment, we will explore knowledge distillation:
+
+\begin{equation}
+\mathcal{L}_{KD} = \alpha T^2 \cdot KL(p_{teacher}, p_{student}) + (1-\alpha) \cdot \mathcal{L}_{CE}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $p_{teacher}$: Softened predictions from the teacher model
+    \item $p_{student}$: Predictions from the student model
+    \item $T$: Temperature parameter for softening
+    \item $\alpha$: Balance between distillation and task loss
+\end{itemize}
+
+\section{Datasets}
+
+We will evaluate our framework on multiple publicly available medical image segmentation datasets to demonstrate continual learning capabilities.
+
+\subsection{Primary Datasets}
+
+\subsubsection{Medical Segmentation Decathlon}
+
+\textbf{Description}: A comprehensive benchmark containing 10 segmentation tasks across different organs and imaging modalities.
+
+\textbf{Tasks}:
+\begin{enumerate}
+    \item Brain tumors (MRI)
+    \item Heart (MRI)
+    \item Liver (CT)
+    \item Hippocampus (MRI)
+    \item Prostate (MRI)
+    \item Lung (CT)
+    \item Pancreas (CT)
+    \item Hepatic vessels (CT)
+    \item Spleen (CT)
+    \item Colon (CT)
+\end{enumerate}
+
+\textbf{URL}: \url{http://medicaldecathlon.com/}
+
+\textbf{Usage}: We will use 3-5 tasks for continual learning experiments, training sequentially on each task.
+
+\subsubsection{ACDC (Automated Cardiac Diagnosis Challenge)}
+
+\textbf{Description}: Cardiac MRI dataset for left ventricle, right ventricle, and myocardium segmentation.
+
+\textbf{Statistics}:
+\begin{itemize}
+    \item 100 patients (training)
+    \item 50 patients (testing)
+    \item 3 classes: LV, RV, Myocardium
+\end{itemize}
+
+\textbf{URL}: \url{https://www.creatis.insa-lyon.fr/Challenge/acdc/}
+
+\subsubsection{Synapse Multi-Organ Segmentation}
+
+\textbf{Description}: Abdominal CT scans with 8 organ annotations.
+
+\textbf{Organs}: Spleen, right kidney, left kidney, gallbladder, esophagus, liver, stomach, pancreas
+
+\textbf{Statistics}:
+\begin{itemize}
+    \item 30 cases (training)
+    \item 20 cases (testing)
+\end{itemize}
+
+\subsubsection{BraTS (Brain Tumor Segmentation)}
+
+\textbf{Description}: Multi-modal brain MRI for tumor segmentation.
+
+\textbf{Modalities}: T1, T1ce, T2, FLAIR
+
+\textbf{Classes}: Whole tumor, tumor core, enhancing tumor
+
+\textbf{URL}: \url{https://www.med.upenn.edu/cbica/brats2020/}
+
+\subsection{Dataset Usage Strategy}
+
+\textbf{Self-Supervised Pre-training}:
+\begin{itemize}
+    \item Use all unlabeled images from all datasets
+    \item Approximately 500-1000 3D volumes
+    \item No annotations required
+\end{itemize}
+
+\textbf{Continual Learning Tasks}:
+\begin{itemize}
+    \item Task 1: Liver segmentation (Medical Decathlon)
+    \item Task 2: Heart segmentation (ACDC)
+    \item Task 3: Brain tumor segmentation (BraTS)
+    \item Task 4: Multi-organ segmentation (Synapse)
+\end{itemize}
+
+\textbf{Evaluation Protocol}:
+\begin{itemize}
+    \item After training on each task, evaluate on all previous tasks
+    \item Measure backward transfer (performance on previous tasks)
+    \item Measure forward transfer (performance on new tasks)
+    \item Report average performance across all tasks
+\end{itemize}
+
+\section{Resources}
+
+\subsection{GitHub Repositories}
+
+\subsubsection{SSL4MIS: Self-Supervised Learning for Medical Image Segmentation}
+
+\textbf{URL}: \url{https://github.com/HiLab-git/SSL4MIS}
+
+\textbf{Stars}: 2.4k
+
+\textbf{Description}: Comprehensive collection of self-supervised learning methods for medical imaging, including:
+\begin{itemize}
+    \item Contrastive learning (SimCLR, MoCo)
+    \item Masked image modeling
+    \item Rotation prediction
+    \item Jigsaw puzzles
+\end{itemize}
+
+\textbf{Usage}: We will adapt the masked image modeling implementation for our pre-training phase.
+
+\subsubsection{Avalanche: Continual Learning Library}
+
+\textbf{URL}: \url{https://github.com/ContinualAI/avalanche}
+
+\textbf{Stars}: 1.7k
+
+\textbf{Description}: Comprehensive continual learning framework with:
+\begin{itemize}
+    \item Multiple continual learning strategies (EWC, LwF, GEM, etc.)
+    \item Benchmark datasets and evaluation protocols
+    \item Easy integration with PyTorch
+\end{itemize}
+
+\textbf{Usage}: We will use Avalanche's continual learning strategies and evaluation metrics.
+
+\subsubsection{MONAI: Medical Open Network for AI}
+
+\textbf{URL}: \url{https://github.com/Project-MONAI/MONAI}
+
+\textbf{Stars}: 5.8k
+
+\textbf{Description}: PyTorch-based framework for deep learning in medical imaging:
+\begin{itemize}
+    \item Medical image preprocessing and augmentation
+    \item 3D U-Net and other segmentation architectures
+    \item Loss functions and metrics for medical imaging
+    \item Data loading and caching utilities
+\end{itemize}
+
+\textbf{Usage}: We will use MONAI for data preprocessing, augmentation, and segmentation architectures.
+
+\subsection{Papers to Review}
+
+\subsubsection{Primary Reference}
+
+\textbf{FedCSL}: Fan Zhang et al., "Federated Cross-Incremental Self-Supervised Learning for Medical Image Segmentation," IEEE Transactions on Neural Networks and Learning Systems, 2024.
+
+\textbf{DOI}: 10.1109/TNNLS.2024.3469962
+
+\textbf{Key Contributions}:
+\begin{itemize}
+    \item Two-stage training framework (self-supervised pre-training + supervised fine-tuning)
+    \item Cross-incremental collaborative distillation (CCD) mechanism
+    \item Retrospect mechanism for client training sequence
+    \item Round-robin distributed masked image modeling
+\end{itemize}
+
+\subsubsection{Related Work}
+
+\begin{enumerate}
+    \item \textbf{Masked Autoencoders (MAE)}: He et al., "Masked Autoencoders Are Scalable Vision Learners," CVPR 2022
+    \begin{itemize}
+        \item Foundation for masked image modeling approach
+        \item High masking ratio (75\%) for efficient learning
+    \end{itemize}
+    
+    \item \textbf{Elastic Weight Consolidation}: Kirkpatrick et al., "Overcoming catastrophic forgetting in neural networks," PNAS 2017
+    \begin{itemize}
+        \item Classic continual learning method
+        \item Uses Fisher information to protect important weights
+    \end{itemize}
+    
+    \item \textbf{Learning Without Forgetting}: Li and Hoiem, "Learning without Forgetting," ECCV 2016
+    \begin{itemize}
+        \item Knowledge distillation for continual learning
+        \item Preserves predictions on previous tasks
+    \end{itemize}
+    
+    \item \textbf{U-Net}: Ronneberger et al., "U-Net: Convolutional Networks for Biomedical Image Segmentation," MICCAI 2015
+    \begin{itemize}
+        \item Standard architecture for medical image segmentation
+        \item Encoder-decoder with skip connections
+    \end{itemize}
+    
+    \item \textbf{nnU-Net}: Isensee et al., "nnU-Net: a self-configuring method for deep learning-based biomedical image segmentation," Nature Methods 2021
+    \begin{itemize}
+        \item State-of-the-art medical image segmentation
+        \item Automatic configuration of preprocessing and architecture
+    \end{itemize}
+\end{enumerate}
+
+\section{Comparison Points and Improvement Opportunities}
+
+\subsection{Comparison with FedCSL}
+
+\begin{table}[h]
+\centering
+\caption{Comparison: FedCSL vs. Our Simplified Approach}
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Component} & \textbf{FedCSL} & \textbf{Ours} \\
+\hline
+Federated Learning & \checkmark & $\times$ \\
+Self-Supervised Pre-training & \checkmark & \checkmark \\
+Continual Learning & \checkmark & \checkmark \\
+Knowledge Distillation & \checkmark & \checkmark (optional) \\
+Multi-client Training & \checkmark & $\times$ \\
+Secure Computation & \checkmark & $\times$ \\
+\hline
+\textbf{Complexity} & Very High & Medium \\
+\textbf{Implementation Time} & 3-4 months & 2-2.5 months \\
+\textbf{Computational Cost} & High & Medium \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Improvement Opportunities}
+
+\subsubsection{Simplification}
+
+\textbf{Opportunity}: Remove federated learning components to focus on core continual learning and self-supervised learning challenges.
+
+\textbf{Justification}:
+\begin{itemize}
+    \item Federated learning adds significant complexity
+    \item Single-institution scenarios are common in medical imaging
+    \item Easier to implement and debug
+    \item Faster training without communication overhead
+\end{itemize}
+
+\subsubsection{Efficiency}
+
+\textbf{Opportunity}: Create lightweight student models through knowledge distillation for real-time deployment.
+
+\textbf{Approach}:
+\begin{itemize}
+    \item Train a large teacher model with continual learning
+    \item Distill knowledge to a smaller student model
+    \item Evaluate trade-off between efficiency and accuracy
+    \item Target: 10x speedup with <5\% accuracy loss
+\end{itemize}
+
+\subsubsection{Multi-Organ Evaluation}
+
+\textbf{Opportunity}: Comprehensive evaluation across diverse organ segmentation tasks.
+
+\textbf{Approach}:
+\begin{itemize}
+    \item Test on 4-5 different organs sequentially
+    \item Measure catastrophic forgetting quantitatively
+    \item Compare multiple continual learning strategies
+    \item Analyze which organs benefit most from self-supervised pre-training
+\end{itemize}
+
+\subsubsection{Adaptive Masking}
+
+\textbf{Opportunity}: Improve masked image modeling with adaptive masking strategies.
+
+\textbf{Approach}:
+\begin{itemize}
+    \item Learn to mask informative regions (e.g., organ boundaries)
+    \item Use attention mechanisms to guide masking
+    \item Compare with random masking baseline
+\end{itemize}
+
+\subsection{Baseline Comparisons}
+
+We will compare our approach against:
+
+\begin{enumerate}
+    \item \textbf{Supervised Learning (No Pre-training)}:
+    \begin{itemize}
+        \item Train directly on labeled data without self-supervised pre-training
+        \item Establishes the benefit of pre-training
+    \end{itemize}
+    
+    \item \textbf{Fine-tuning (No Continual Learning)}:
+    \begin{itemize}
+        \item Fine-tune on each task sequentially without continual learning strategies
+        \item Demonstrates catastrophic forgetting
+    \end{itemize}
+    
+    \item \textbf{Multi-task Learning}:
+    \begin{itemize}
+        \item Train on all tasks simultaneously
+        \item Upper bound for continual learning performance
+    \end{itemize}
+    
+    \item \textbf{Individual Task Training}:
+    \begin{itemize}
+        \item Train separate models for each task
+        \item Upper bound for single-task performance
+    \end{itemize}
+\end{enumerate}
+
+\section{Contribution Identification}
+
+\subsection{Primary Contributions}
+
+\begin{enumerate}
+    \item \textbf{Simplified Framework}:
+    \begin{itemize}
+        \item Remove federated learning complexity while maintaining core benefits
+        \item More accessible for single-institution deployment
+        \item Easier to implement and reproduce
+    \end{itemize}
+    
+    \item \textbf{Comprehensive Evaluation}:
+    \begin{itemize}
+        \item Systematic comparison of continual learning strategies
+        \item Multi-organ evaluation across diverse anatomical structures
+        \item Analysis of self-supervised pre-training benefits
+    \end{itemize}
+    
+    \item \textbf{Efficient Deployment}:
+    \begin{itemize}
+        \item Knowledge distillation for lightweight models
+        \item Trade-off analysis between efficiency and accuracy
+        \item Practical deployment considerations
+    \end{itemize}
+    
+    \item \textbf{Open-Source Implementation}:
+    \begin{itemize}
+        \item Publicly available code on GitHub
+        \item Reproducible experiments with clear documentation
+        \item Easy-to-use API for researchers
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Expected Outcomes}
+
+\begin{enumerate}
+    \item \textbf{Performance}:
+    \begin{itemize}
+        \item Match or exceed supervised baselines with limited labels
+        \item Minimal catastrophic forgetting (<10\% performance drop)
+        \item Competitive with multi-task learning upper bound
+    \end{itemize}
+    
+    \item \textbf{Efficiency}:
+    \begin{itemize}
+        \item 10x speedup with knowledge distillation
+        \item <5\% accuracy loss in student models
+        \item Feasible for real-time deployment
+    \end{itemize}
+    
+    \item \textbf{Generalization}:
+    \begin{itemize}
+        \item Positive forward transfer to new tasks
+        \item Robust across different organs and modalities
+        \item Effective with limited labeled data (10-20\% of full dataset)
+    \end{itemize}
+\end{enumerate}
+
+\section{Implementation Plan}
+
+\subsection{Phase 1: Setup and Baseline (Weeks 1-2)}
+
+\begin{itemize}
+    \item Download and preprocess datasets
+    \item Implement data loading and augmentation pipelines
+    \item Train supervised baselines on individual tasks
+    \item Establish evaluation metrics and protocols
+\end{itemize}
+
+\subsection{Phase 2: Self-Supervised Pre-training (Weeks 3-4)}
+
+\begin{itemize}
+    \item Implement masked image modeling
+    \item Pre-train encoder on unlabeled data
+    \item Evaluate learned representations
+    \item Compare with supervised pre-training
+\end{itemize}
+
+\subsection{Phase 3: Continual Learning (Weeks 5-7)}
+
+\begin{itemize}
+    \item Implement continual learning strategies (EWC, LwF, replay)
+    \item Train sequentially on multiple tasks
+    \item Measure catastrophic forgetting
+    \item Compare different strategies
+\end{itemize}
+
+\subsection{Phase 4: Knowledge Distillation (Week 8)}
+
+\begin{itemize}
+    \item Train teacher model with continual learning
+    \item Distill to lightweight student model
+    \item Evaluate efficiency-accuracy trade-off
+    \item Optimize for deployment
+\end{itemize}
+
+\subsection{Phase 5: Evaluation and Analysis (Weeks 9-10)}
+
+\begin{itemize}
+    \item Comprehensive experiments on all datasets
+    \item Statistical significance testing
+    \item Ablation studies
+    \item Qualitative analysis of segmentation results
+\end{itemize}
+
+\subsection{Phase 6: Paper Writing (Weeks 11-12)}
+
+\begin{itemize}
+    \item Write all sections (Introduction, Method, Results, Conclusion)
+    \item Create figures and tables
+    \item Prepare code repository
+    \item Final proofreading and submission
+\end{itemize}
+
+\section{Evaluation Metrics}
+
+\subsection{Segmentation Performance}
+
+\begin{itemize}
+    \item \textbf{Dice Similarity Coefficient (DSC)}:
+    \begin{equation}
+    DSC = \frac{2|X \cap Y|}{|X| + |Y|}
+    \end{equation}
+    
+    \item \textbf{Hausdorff Distance (HD95)}: 95th percentile of surface distances
+    
+    \item \textbf{Intersection over Union (IoU)}:
+    \begin{equation}
+    IoU = \frac{|X \cap Y|}{|X \cup Y|}
+    \end{equation}
+\end{itemize}
+
+\subsection{Continual Learning Metrics}
+
+\begin{itemize}
+    \item \textbf{Average Accuracy}: Mean performance across all tasks
+    
+    \item \textbf{Backward Transfer (BWT)}:
+    \begin{equation}
+    BWT = \frac{1}{T-1} \sum_{i=1}^{T-1} (R_{T,i} - R_{i,i})
+    \end{equation}
+    where $R_{T,i}$ is the performance on task $i$ after training on task $T$.
+    
+    \item \textbf{Forward Transfer (FWT)}:
+    \begin{equation}
+    FWT = \frac{1}{T-1} \sum_{i=2}^{T} (R_{i-1,i} - R_{0,i})
+    \end{equation}
+    
+    \item \textbf{Forgetting Measure}:
+    \begin{equation}
+    F = \frac{1}{T-1} \sum_{i=1}^{T-1} \max_{j \in \{1,\ldots,T-1\}} (R_{j,i} - R_{T,i})
+    \end{equation}
+\end{itemize}
+
+\section{Timeline}
+
+\begin{table}[h]
+\centering
+\caption{Project Timeline (12 Weeks)}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Week} & \textbf{Phase} & \textbf{Deliverables} \\
+\hline
+1-2 & Setup \& Baseline & Data ready, baselines trained \\
+3-4 & Self-Supervised & Pre-trained encoder \\
+5-7 & Continual Learning & CL models trained \\
+8 & Knowledge Distillation & Student models \\
+9-10 & Evaluation & All experiments done \\
+11-12 & Paper Writing & Final paper \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Conclusion}
+
+This project presents a simplified yet comprehensive approach to continual self-supervised learning for medical image segmentation. By removing the federated learning components from FedCSL, we focus on the core challenges of self-supervised pre-training and continual learning, making the framework more accessible and practical for single-institution deployment.
+
+Our approach combines three APAI-approved methodologies (self-supervised learning, continual learning, and knowledge distillation) to address the critical challenges of limited annotations and catastrophic forgetting in medical image segmentation. With publicly available datasets and open-source implementations, we aim to create a reproducible and practical framework that advances the state-of-the-art in continual learning for medical imaging.
+
+\begin{thebibliography}{00}
+
+% ── Primary reference ──────────────────────────────────────────────────────────
+\bibitem{fedcsl2025}
+F.~Zhang, H.~Liu, Q.~Cai, C.-M.~Feng, B.~Wang, S.~Wang, J.~Dong, and D.~Zhang,
+``Federated Cross-Incremental Self-Supervised Learning for Medical Image Segmentation,''
+\textit{IEEE Transactions on Neural Networks and Learning Systems},
+2025. DOI:~10.1109/TNNLS.2024.3469962
+
+% ── Architecture / Supervised baselines ────────────────────────────────────────
+\bibitem{ronneberger2015unet}
+O.~Ronneberger, P.~Fischer, and T.~Brox,
+``U-Net: Convolutional Networks for Biomedical Image Segmentation,''
+in \textit{Proc. MICCAI}, Lecture Notes in Computer Science, vol.~9351, pp.~234--241,
+Springer, 2015. DOI:~10.1007/978-3-319-24574-4\_28
+
+\bibitem{isensee2021nnunet}
+F.~Isensee, P.~F.~Jaeger, S.~A.~A.~Kohl, J.~Petersen, and K.~H.~Maier-Hein,
+``nnU-Net: a self-configuring method for deep learning-based biomedical image segmentation,''
+\textit{Nature Methods}, vol.~18, no.~2, pp.~203--211, 2021.
+DOI:~10.1038/s41592-020-01008-z
+
+% ── Dataset ────────────────────────────────────────────────────────────────────
+\bibitem{simpson2022decathlon}
+A.~L.~Simpson et al.,
+``A large annotated medical image dataset for the development and evaluation of segmentation algorithms,''
+\textit{Nature Communications}, vol.~13, no.~1, p.~4128, 2022.
+DOI:~10.1038/s41467-022-30695-9
+
+% ── Self-Supervised Learning: foundation ───────────────────────────────────────
+\bibitem{he2022mae}
+K.~He, X.~Chen, S.~Xie, Y.~Li, P.~Dollár, and R.~Girshick,
+``Masked Autoencoders Are Scalable Vision Learners,''
+in \textit{Proc. IEEE/CVF CVPR}, pp.~16000--16009, 2022.
+arXiv:2111.06377
+
+\bibitem{tian2023spark}
+K.~Tian, Y.~Jiang, Q.~Diao, C.~Lin, L.~Wang, and Z.~Yuan,
+``Designing BERT for Convolutional Networks: Sparse and Hierarchical Masked Modeling,''
+in \textit{Proc. ICLR}, 2023.
+arXiv:2301.03580
+
+% ── Self-Supervised Learning: medical MIM ─────────────────────────────────────
+\bibitem{xie2024rethinking}
+J.~Xie et al.,
+``Rethinking masked image modelling for medical image representation,''
+\textit{Medical Image Analysis}, vol.~97, p.~103304, 2024.
+DOI:~10.1016/j.media.2024.103304
+
+\bibitem{qi2024gmim}
+X.~Qi et al.,
+``GMIM: Self-supervised pre-training for 3D medical image segmentation with grouped masked image modeling,''
+\textit{Computers in Biology and Medicine}, vol.~178, p.~108547, 2024.
+DOI:~10.1016/j.compbiomed.2024.108547
+
+\bibitem{xing2024hybridmim}
+X.~Xing et al.,
+``Hybrid Masked Image Modeling for 3D Medical Image Segmentation,''
+\textit{IEEE Journal of Biomedical and Health Informatics}, 2024.
+DOI:~10.1109/JBHI.2024.3360239
+
+\bibitem{lyu2025masked}
+J.~Lyu et al.,
+``Masked Deformation Modeling for Volumetric Brain MRI Self-Supervised Pre-training,''
+\textit{IEEE Transactions on Medical Imaging}, 2025.
+DOI:~10.1109/TMI.2024.3510922
+
+\bibitem{tang2026hiendmae}
+W.~Tang et al.,
+``Hi-End-MAE: Hierarchical encoder-driven masked autoencoders are stronger vision learners for medical image segmentation,''
+\textit{Medical Image Analysis}, 2026.
+DOI:~10.1016/j.media.2025.103770
+
+% ── Continual Learning: seminal ────────────────────────────────────────────────
+\bibitem{kirkpatrick2017ewc}
+J.~Kirkpatrick et al.,
+``Overcoming catastrophic forgetting in neural networks,''
+\textit{Proceedings of the National Academy of Sciences},
+vol.~114, no.~13, pp.~3521--3526, 2017.
+DOI:~10.1073/pnas.1611835114
+
+\bibitem{li2016lwf}
+Z.~Li and D.~Hoiem,
+``Learning without Forgetting,''
+in \textit{Proc. ECCV}, Lecture Notes in Computer Science, vol.~9908,
+Springer, 2016. DOI:~10.1007/978-3-319-46493-0\_37
+
+\bibitem{lopezpaz2017gem}
+D.~Lopez-Paz and M.~A.~Ranzato,
+``Gradient Episodic Memory for Continual Learning,''
+in \textit{Advances in Neural Information Processing Systems (NeurIPS)}, vol.~30, 2017.
+arXiv:1706.08840
+
+% ── Continual Learning: medical segmentation ───────────────────────────────────
+\bibitem{kim2025mosinversion}
+J.~Kim et al.,
+``MOSInversion: Knowledge distillation-based incremental learning in organ segmentation,''
+\textit{Computers in Biology and Medicine}, 2025.
+DOI:~10.1016/j.compbiomed.2025.111272
+
+\bibitem{yang2025continual}
+X.~Yang et al.,
+``Continual source-free active domain adaptation for nasopharyngeal carcinoma tumor segmentation,''
+\textit{Neural Networks}, 2025.
+DOI:~10.1016/j.neunet.2025.107869
+
+\end{thebibliography}
+
+\end{document}

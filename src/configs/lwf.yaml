@@ -1,0 +1,21 @@
+# LwF continual learning configuration
+data_root:         "/kaggle/input/medical-segmentation-decathlon"
+output_dir:        "/kaggle/working/checkpoints/lwf"
+pretrained_ckpt:   "/kaggle/working/checkpoints/pretrain/pretrained_encoder_best.pth"
+use_pretrained:    true
+
+task_order:        ["liver", "pancreas", "heart"]
+channels:          [32, 64, 128, 256, 512]
+strides:           [2, 2, 2, 2]
+
+# LwF
+lwf_alpha:         1.0
+lwf_temperature:   2.0
+
+# Training per task
+epochs_per_task:   50
+batch_size:        2
+lr:                1.0e-4
+weight_decay:      1.0e-5
+num_workers:       2
+cache_rate:        0.1
