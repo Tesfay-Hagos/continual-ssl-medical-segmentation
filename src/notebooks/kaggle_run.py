@@ -45,6 +45,10 @@ if ON_KAGGLE:
         result = subprocess.run(["git", "-C", REPO_DIR, "pull"],
                                 capture_output=True, text=True)
     print(result.stdout or result.stderr)
+    # Remove stale .pyc files so updated modules are recompiled fresh
+    subprocess.run(["find", REPO_DIR, "-type", "d", "-name", "__pycache__",
+                    "-exec", "rm", "-rf", "{}", "+"],
+                   capture_output=True)
 else:
     print(f"Using repo at: {REPO_DIR}")
 
@@ -63,9 +67,12 @@ else:
 
 # %%
 # Add src to Python path
+import importlib
+
 SRC_DIR = os.path.join(REPO_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
+importlib.invalidate_caches()
 
 import torch
 import numpy as np
