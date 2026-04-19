@@ -129,10 +129,26 @@ _EXT_GZ  = ".nii.gz"
 _EXT_NII = ".nii"
 
 
+def _real_nii(paths: List[Path]) -> List[Path]:
+    """Filter out macOS resource-fork files (._) from a path list."""
+    return [p for p in paths if not p.name.startswith("._")]
+
+
 def glob_nii(directory: Path) -> List[Path]:
-    """Glob NIfTI files from a directory — tries .nii.gz first, falls back to .nii."""
-    gz = sorted(directory.glob(f"*{_EXT_GZ}"))
-    return gz if gz else sorted(directory.glob(f"*{_EXT_NII}"))
+    """
+    Find NIfTI files in a directory. Handles three layouts:
+      Flat gz  : imagesTr/case.nii.gz
+      Flat nii : imagesTr/case.nii           (Kaggle liver/heart)
+      Nested   : imagesTr/case.nii/case.nii  (Kaggle nested packaging)
+    """
+    gz = _real_nii(sorted(directory.glob(f"*{_EXT_GZ}")))
+    if gz:
+        return gz
+    flat = _real_nii(sorted(directory.glob(f"*{_EXT_NII}")))
+    if flat:
+        return flat
+    # Kaggle nested: each file is wrapped in a same-named folder
+    return _real_nii(sorted(directory.glob(f"*/*{_EXT_NII}")))
 
 
 # ── Dataset verification ───────────────────────────────────────────────────────
@@ -169,15 +185,11 @@ def get_file_list(task_roots: Dict[str, str],
     lbl_dir  = task_dir / "labelsTr"
 
     img_files = glob_nii(img_dir)
-    ext       = img_files[0].suffix if img_files else _EXT_GZ
-    if ext == ".gz":                         # Path.suffix of "foo.nii.gz" is ".gz"
-        ext = _EXT_GZ
-    cases = [f.name.replace(_EXT_GZ, "").replace(_EXT_NII, "") for f in img_files]
     files = [
-        {"image": str(img_dir / f"{c}{ext}"),
-         "label": str(lbl_dir / f"{c}{ext}"),
+        {"image": str(img),
+         "label": str(lbl_dir / img.relative_to(img_dir)),
          "task":  TASKS[task_name]["task_id"]}
-        for c in cases
+        for img in img_files
     ]
 
     rng   = np.random.default_rng(42)
