@@ -1,0 +1,376 @@
+[
+  {
+    "title": "Two-Stage Self-Supervised Contrastive Learning Aided Transformer for Real-Time Medical Image Segmentation.",
+    "authors": [
+      "Abdul Qayyum",
+      "Imran Razzak",
+      "Moona Mazher",
+      "Tariq Khan",
+      "Weiping Ding",
+      "Steven Niederer"
+    ],
+    "year": 2026,
+    "abstract": "The availability of large, high-quality annotated datasets in the medical domain poses a substantial challenge in segmentation tasks. To mitigate the reliance on annotated training data, self-supervised pre-training strategies have emerged, particularly employing contrastive learning methods on dense pixel-level representations. In this work, we proposed to capitalize on intrinsic anatomical similarities within medical image data and develop a semantic segmentation framework through a self-supervised fusion network, where the availability of annotated volumes is limited. In a unified training phase, we combine segmentation loss with contrastive loss, enhancing the distinction between significant anatomical regions that adhere to the available annotations. To further improve the segmentation performance, we introduce an efficient parallel transformer module that leverages Multiview multiscale feature fusion and depth-wise features. The proposed transformer architecture, based on multiple encoders, is trained in a self-supervised manner using contrastive loss. Initially, the transformer is trained using an unlabeled dataset. We then fine-tune one encoder using data from the first stage and another encoder using a small set of annotated segmentation masks. These encoder features are subsequently concatenated for the purpose of brain tumor segmentation. The multiencoder-based transformer model yields significantly better outcomes across three medical image segmentation tasks. We validated our proposed solution by fusing images across diverse medical image segmentation challenge datasets, demonstrating its efficacy by outperforming state-of-the-art methodologies.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/38090821/",
+    "venue": "IEEE journal of biomedical and health informatics",
+    "citations": 0,
+    "source": "PubMed",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "A General Global and Local Pre-Training Framework for 3D Medical Image Segmentation.",
+    "authors": [
+      "Jianguo Ju",
+      "Ziyu Guan",
+      "Hao Lei",
+      "Dandan Qiu",
+      "Haoming Zhang",
+      "Long Chen",
+      "Fei Xie",
+      "Wei Zhao"
+    ],
+    "year": 2026,
+    "abstract": "Accurate target segmentation from computed tomography (CT) scans is crucial for surgical robots to perform clinical surgeries successfully. However, the lack of medical image data and annotations has been the biggest obstacle to learning robust medical image segmentation models. Self-supervised learning can effectively address this problem by providing a strategy to pre-train a model with unlabeled data, and then fine-tune downstream tasks with limited labeled data. Existing self-supervised methods fail to simultaneously utilize the abundant global anatomical structure information and local feature differences in medical imaging. In this work, we propose a new strategy for the pre-training framework, which uses the three-dimensional anatomical structure of medical images and specific task and background cues to segment volumetric medical images with limited annotations. Specifically, we propose (1) learning intrinsic patterns of volumetric medical image structures through multiple sub-tasks, and (2) designing a multi-level background cube contrastive learning strategy to enhance the target feature representation by exploiting the differences between the specific target and background. We conduct extensive evaluations on two publicly available datasets. Under limited annotation settings, the proposed method yields significant improvements compared to other self-supervised learning techniques. The proposed method achieves within 6% of the baseline performance using only five labeled CT volumes for training.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/38051609/",
+    "venue": "IEEE journal of biomedical and health informatics",
+    "citations": 0,
+    "source": "PubMed",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Technical Note: Neural Network Architectures for Self-Supervised Body Part Regression Models with Automated Localized Segmentation Application.",
+    "authors": [
+      "Michael Fei",
+      "Alan B McMillan"
+    ],
+    "year": 2025,
+    "abstract": "The advancement of medical image deep learning necessitates tools that can accurately identify body regions from whole-body scans to serve as an essential pre-processing step for downstream tasks. Typically, these deep learning models rely on labeled data and supervised learning, which is labor-intensive. However, the emergence of self-supervised learning is revolutionizing the field by eliminating the need for labels. The purpose of this study was to compare neural network architectures of self-supervised models that produced a body part regression (BPR) slice score to aid in the development of anatomically localized segmentation models. VGG, ResNet, DenseNet, ConvNext, and EfficientNet BPR models were implemented in the MONAI/Pytorch framework. Landmark organs were correlated to slice scores and mean absolute error (MAE) was calculated from the predicted slice and the actual slice of various organ landmarks. Four localized DynUNet segmentation models (thorax, upper abdomen, lower abdomen, and pelvis) were developed using the BPR slice scores. Dice similarity coefficient (DSC) was compared between the localized and baseline segmentation models. The best performing BPR model was the EfficientNet architecture with an overall 3.18 MAE, compared to the VGG baseline model with a MAE of 6.29. The localized segmentation model significantly outperformed the baseline in 16 out of 20 organs with a DSC of 0.88. Enhanced neural networks like EfficientNet have a large performance increase in localizing anatomical structures in a CT compared in BPR task. Utilizing BPR slice score is shown to be effective in anatomically localized segmentation tasks with improved performance.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/39538050/",
+    "venue": "Journal of imaging informatics in medicine",
+    "citations": 0,
+    "source": "PubMed",
+    "keywords_found": [
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Federated Cross-Incremental Self-Supervised Learning for Medical Image Segmentation.",
+    "authors": [
+      "Fan Zhang",
+      "Huiying Liu",
+      "Qing Cai",
+      "Chun-Mei Feng",
+      "Binglu Wang",
+      "Shanshan Wang",
+      "Junyu Dong",
+      "David Zhang"
+    ],
+    "year": 2025,
+    "abstract": "Federated cross learning has shown impressive performance in medical image segmentation. However, it encounters the catastrophic forgetting issue caused by data heterogeneity across different clients and is particularly pronounced when simultaneously facing pixelwise label deficiency problem. In this article, we propose a novel federated cross-incremental self-supervised learning method, coined FedCSL, which not only can enable any client in the federation incrementally yet effectively learn from others without inducing knowledge forgetting or requiring massive labeled samples, but also preserve maximum data privacy. Specifically, to overcome the catastrophic forgetting issue, a novel cross-incremental collaborative distillation (CCD) mechanism is proposed, which distills explicit knowledge learned from previous clients to subsequent clients based on secure multiparty computation (MPC). Besides, an effective retrospect mechanism is designed to rearrange the training sequence of clients per round, further releasing the power of CCD by enforcing interclient knowledge propagation. In addition, to alleviate the need of large-scale densely annotated pretraining medical datasets, we also propose a two-stage training framework, in which federated cross-incremental self-supervised pretraining paradigm first extracts robust yet general image-level patterns across multi-institutional data silos via a novel round-robin distributed masked image modeling (MIM) pipeline; then, the resulting visual concepts, e.g., semantics, are transferred to the federated cross-incremental supervised fine-tuning paradigm, favoring various cross-silo medical image segmentation tasks. The experimental results on public datasets demonstrate the effectiveness of the proposed method as well as the consistently superior performance of our method over most state-of-the-art methods quantitatively and qualitatively.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/39401108/",
+    "venue": "IEEE transactions on neural networks and learning systems",
+    "citations": 0,
+    "source": "PubMed",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Masked autoencoders with generalizable self-distillation for skin lesion segmentation.",
+    "authors": [
+      "Yichen Zhi",
+      "Hongxia Bie",
+      "Jiali Wang",
+      "Lihan Ren"
+    ],
+    "year": 2025,
+    "abstract": "In the field of skin lesion image segmentation, accurate identification and partitioning of diseased regions is of vital importance for in-depth analysis of skin cancer. Self-supervised learning, i.e., MAE, has emerged as a potent force in the medical imaging domain, which autonomously learns and extracts latent features from unlabeled data, thereby yielding pre-trained models that greatly assist downstream tasks. To encourage pre-trained models to more comprehensively learn the global structural and local detail information inherent in dermoscopy images, we introduce a Teacher-Student architecture, named TEDMAE, by incorporating a self-distillation mechanism, it learns holistic image feature information to improve the generalizable global knowledge learning of the student MAE model. To make the image features learned by the model suitable for unknown test images, two optimization strategies are, Exterior Conversion Augmentation (EC) utilizes random convolutional kernels and linear interpolation to effectively transform the input image into one with the same shape but altered intensities and textures, while Dynamic Feature Generation (DF) employs a nonlinear attention mechanism for feature merging, enhancing the expressive power of the features, are proposed to enhance the generalizability of global features learned by the teacher model, thereby improving the overall generalization capability of the pre-trained models. Experimental results from the three public skin disease datasets, ISIC2019, ISIC2017, and PH ",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/38653880/",
+    "venue": "Medical & biological engineering & computing",
+    "citations": 0,
+    "source": "PubMed",
+    "keywords_found": [
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Self-supervised learning improves robustness of deep learning lung tumor segmentation models to CT imaging differences.",
+    "authors": [
+      "Jue Jiang",
+      "Aneesh Rangnekar",
+      "Harini Veeraraghavan"
+    ],
+    "year": 2025,
+    "abstract": "Self-supervised learning (SSL) is an approach to extract useful feature representations from unlabeled data, and enable fine-tuning on downstream tasks with limited labeled examples. Self-pretraining is a SSL approach that uses curated downstream task dataset for both pretraining and fine-tuning. Availability of large, diverse, and uncurated public medical image sets presents the opportunity to potentially create foundation models by applying SSL in the \"wild\" that are robust to imaging variations. However, the benefit of wild- versus self-pretraining has not been studied for medical image analysis. Compare robustness of wild versus self-pretrained models created using convolutional neural network (CNN) and transformer (vision transformer [ViT] and hierarchical shifted window [Swin]) models for non-small cell lung cancer (NSCLC) segmentation from 3D computed tomography (CT) scans. CNN, ViT, and Swin models were wild-pretrained using unlabeled 10,412 3D CTs sourced from the cancer imaging archive and internal datasets. Self-pretraining was applied to same networks using a curated public downstream task dataset (n = 377) of patients with NSCLC. Pretext tasks introduced in self-distilled masked image transformer were used for both pretraining approaches. All models were fine-tuned to segment NSCLC (n = 377 training dataset) and tested on two separate datasets containing early (public n = 156) and advanced stage (internal n = 196) NSCLC. Models were evaluated in terms of: (a) accuracy, (b) robustness to image differences from contrast, slice thickness, and reconstruction kernels, and (c) impact of pretext tasks for pretraining. Feature reuse was evaluated using centered kernel alignment. Wild-pretrained Swin models resulted in higher feature reuse at earlier level layers and increased feature differentiation close to output. Wild-pretrained Swin outperformed self-pretrained models for analyzed imaging acquisitions. Neither ViT nor CNN showed a clear benefit of wild-pretraining compared to self-pretraining. Masked image prediction pretext task that forces networks to learn the local structure resulted in higher accuracy compared to contrastive task that models global image information. Wild-pretrained Swin networks were more robust to analyzed CT imaging differences for lung tumor segmentation than self-pretrained methods. ViT and CNN models did not show a clear benefit for wild-pretraining over self-pretraining.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/39636237/",
+    "venue": "Medical physics",
+    "citations": 0,
+    "source": "PubMed",
+    "keywords_found": [
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Multi-scale graph harmonies: Unleashing U-Net's potential for medical image segmentation through contrastive learning.",
+    "authors": [
+      "Jie Wu",
+      "Jiquan Ma",
+      "Heran Xi",
+      "Jinbao Li",
+      "Jinghua Zhu"
+    ],
+    "year": 2025,
+    "abstract": "Medical image segmentation is essential for accurately representing tissues and organs in scans, improving diagnosis, guiding treatment, enabling quantitative analysis, and advancing AI-assisted healthcare. Organs and lesion areas in medical images have complex geometries and spatial relationships. Due to variations in the size and location of lesion areas, automatic segmentation faces significant challenges. While Convolutional Neural Networks (CNNs) and Transformers have proven effective in segmentation task, they still possess inherent limitations. Because these models treat images as regular grids or sequences of patches, they struggle to learn the geometric features of an image, which are essential for capturing irregularities and subtle details. In this paper we propose a novel segmentation model, MSGH, which utilizes Graph Neural Network (GNN) to fully exploit geometric representation for guiding image segmentation. In MSGH, we combine multi-scale features from Pyramid Feature and Graph Feature branches to facilitate information exchange across different networks. We also leverage graph contrastive representation learning to extract features through self-supervised learning to mitigate the impact of category imbalance in medical images. Moreover, we optimize the decoder by integrating Transformer to enhance the model's capability in restoring the intricate image details feature. We conducted a comprehensive experimental study on ACDC, Synapse and BraTS datasets to validate the effectiveness and efficiency of MSGH. Our method achieved an improvement of 2.56-13.41%, 1.04-5.11% and 1.77-3.35% of dice on the three segmentation tasks respectively. The results demonstrate that our model consistently performs well compared with state-of-the-art models. The source code is accessible at https://github.com/Dorothywujie/MSGH.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/39608151/",
+    "venue": "Neural networks : the official journal of the International Neural Network Society",
+    "citations": 0,
+    "source": "PubMed",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Self-supervised segmentation and characterization of fiber bundles in anatomic tracing data.",
+    "authors": [
+      "Vaanathi Sundaresan",
+      "Julia F Lehman",
+      "Chiara Maffei",
+      "Suzanne N Haber",
+      "Anastasia Yendiki"
+    ],
+    "year": 2025,
+    "abstract": "Anatomic tracing is the gold standard tool for delineating brain connections and for validating more recently developed imaging approaches such as diffusion MRI tractography. A key step in the analysis of data from tracer experiments is the careful, manual charting of fiber trajectories on histological sections. This is a very time-consuming process, which limits the amount of annotated tracer data that are available for validation studies. Thus, there is a need to accelerate this process by developing a method for computer-assisted segmentation. Such a method must be robust to the common artifacts in tracer data, including variations in the intensity of stained axons and background, as well as spatial distortions introduced by sectioning and mounting the tissue. The method should also achieve satisfactory performance using limited manually charted data for training. Here we propose the first deep-learning method, with a self-supervised loss function, for segmentation of fiber bundles on histological sections from macaque brains that have received tracer injections. We address the limited availability of manual labels with a semi-supervised training technique that takes advantage of unlabeled data to improve performance. We also introduce anatomic and across-section continuity constraints to improve accuracy. We show that our method can be trained on manually charted sections from a single case and segment unseen sections from different cases, with a true positive rate of ~0.80. We further demonstrate the utility of our method by quantifying the density of fiber bundles as they travel through different white-matter pathways. We show that fiber bundles originating in the same injection site have different levels of density when they travel through different pathways, a finding that can have implications for microstructure-informed tractography methods. The code for our method is available at https://github.com/v-sundaresan/fiberbundle_seg_tracing.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/37873366/",
+    "venue": "bioRxiv : the preprint server for biology",
+    "citations": 0,
+    "source": "PubMed",
+    "keywords_found": [
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "HEDN: multi-oriented hierarchical extraction and dual-frequency decoupling network for 3D medical image segmentation.",
+    "authors": [
+      "Yu Wang",
+      "Guoheng Huang",
+      "Zeng Lu",
+      "Ying Wang",
+      "Xuhang Chen",
+      "Xiaochen Yuan",
+      "Yan Li",
+      "Jieni Liu",
+      "Yingping Huang"
+    ],
+    "year": 2025,
+    "abstract": "Previous 3D encoder-decoder segmentation architectures struggled with fine-grained feature decomposition, resulting in unclear feature hierarchies when fused across layers. Furthermore, the blurred nature of contour boundaries in medical imaging limits the focus on high-frequency contour features. To address these challenges, we propose a Multi-oriented Hierarchical Extraction and Dual-frequency Decoupling Network (HEDN), which consists of three modules: Encoder-Decoder Module (E-DM), Multi-oriented Hierarchical Extraction Module (Multi-HEM), and Dual-frequency Decoupling Module (Dual-DM). The E-DM performs the basic encoding and decoding tasks, while Multi-HEM decomposes and fuses spatial and slice-level features in 3D, enriching the feature hierarchy by weighting them through 3D fusion. Dual-DM separates high-frequency features from the reconstructed network using self-supervision. Finally, the self-supervised high-frequency features separated by Dual-DM are inserted into the process following Multi-HEM, enhancing interactions and complementarities between contour features and hierarchical features, thereby mutually reinforcing both aspects. On the Synapse dataset, HEDN outperforms existing methods, boosting Dice Similarity Score (DSC) by 1.38% and decreasing 95% Hausdorff Distance (HD95) by 1.03 mm. Likewise, on the Automatic Cardiac Diagnosis Challenge (ACDC) dataset, HEDN achieves  0.5% performance gains across all categories.",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/39316283/",
+    "venue": "Medical & biological engineering & computing",
+    "citations": 0,
+    "source": "PubMed",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "DINOv2 Based Self Supervised Learning for Few Shot Medical Image Segmentation",
+    "authors": [
+      "Lev Ayzenberg",
+      "Raja Giryes",
+      "H. Greenspan"
+    ],
+    "year": 2024,
+    "abstract": "Deep learning models have emerged as the cornerstone of medical image segmentation, but their efficacy hinges on the availability of extensive manually labeled datasets and their adaptability to unforeseen categories remains a challenge. Few-shot segmentation (FSS) offers a promising solution by endowing models with the capacity to learn novel classes from limited labeled examples. A leading method for FSS is ALPNet, which compares features between the query image and the few available support segmented images. A key question about using ALPNet is how to design its features. In this work, we delve into the potential of using features from DINOv2, which is a foundational self-supervised learning model in computer vision. Leveraging the strengths of ALPNet and harnessing the feature extraction capabilities of DINOv2, we present a novel approach to few-shot segmentation that not only enhances performance but also paves the way for more robust and adaptable medical image analysis.",
+    "url": "https://www.semanticscholar.org/paper/929795fa0df3339fceb0dc29584cb1ca695044e8",
+    "venue": "IEEE International Symposium on Biomedical Imaging",
+    "citations": 16,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Self-Supervised Medical Image Segmentation Using Deep Reinforced Adaptive Masking",
+    "authors": [
+      "Zhenghua Xu",
+      "Yunxin Liu",
+      "Gang Xu",
+      "Thomas Lukasiewicz"
+    ],
+    "year": 2024,
+    "abstract": "Self-supervised learning aims to learn transferable representations from unlabeled data for downstream tasks. Inspired by masked language modeling in natural language processing, masked image modeling (MIM) has achieved certain success in the field of computer vision, but its effectiveness in medical images remains unsatisfactory. This is mainly due to the high redundancy and small discriminative regions in medical images compared to natural images. Therefore, this paper proposes an adaptive hard masking (AHM) approach based on deep reinforcement learning to expand the application of MIM in medical images. Unlike predefined random masks, AHM uses an asynchronous advantage actor-critic (A3C) model to predict reconstruction loss for each patch, enabling the model to learn where masking is valuable. By optimizing the non-differentiable sampling process using reinforcement learning, AHM enhances the understanding of key regions, thereby improving downstream task performance. Experimental results on two medical image datasets demonstrate that AHM outperforms state-of-the-art methods. Additional experiments under various settings validate the effectiveness of AHM in constructing masked images.",
+    "url": "https://www.semanticscholar.org/paper/eac717db1cdd39649cd7f07309a7587cbeebfad2",
+    "venue": "IEEE Transactions on Medical Imaging",
+    "citations": 14,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Federated Cross-Incremental Self-Supervised Learning for Medical Image Segmentation",
+    "authors": [
+      "Fan Zhang",
+      "Huiying Liu",
+      "Qing Cai",
+      "Chun-Mei Feng",
+      "Binglu Wang",
+      "Shanshan Wang",
+      "Junyu Dong",
+      "David Zhang"
+    ],
+    "year": 2024,
+    "abstract": "Federated cross learning has shown impressive performance in medical image segmentation. However, it encounters the catastrophic forgetting issue caused by data heterogeneity across different clients and is particularly pronounced when simultaneously facing pixelwise label deficiency problem. In this article, we propose a novel federated cross-incremental self-supervised learning method, coined FedCSL, which not only can enable any client in the federation incrementally yet effectively learn from others without inducing knowledge forgetting or requiring massive labeled samples, but also preserve maximum data privacy. Specifically, to overcome the catastrophic forgetting issue, a novel cross-incremental collaborative distillation (CCD) mechanism is proposed, which distills explicit knowledge learned from previous clients to subsequent clients based on secure multiparty computation (MPC). Besides, an effective retrospect mechanism is designed to rearrange the training sequence of clients per round, further releasing the power of CCD by enforcing interclient knowledge propagation. In addition, to alleviate the need of large-scale densely annotated pretraining medical datasets, we also propose a two-stage training framework, in which federated cross-incremental self-supervised pretraining paradigm first extracts robust yet general image-level patterns across multi-institutional data silos via a novel round-robin distributed masked image modeling (MIM) pipeline; then, the resulting visual concepts, e.g., semantics, are transferred to the federated cross-incremental supervised fine-tuning paradigm, favoring various cross-silo medical image segmentation tasks. The experimental results on public datasets demonstrate the effectiveness of the proposed method as well as the consistently superior performance of our method over most state-of-the-art methods quantitatively and qualitatively.",
+    "url": "https://www.semanticscholar.org/paper/cb0af2a5de871329b08762aad522d536dc9d8a1e",
+    "venue": "IEEE Transactions on Neural Networks and Learning Systems",
+    "citations": 13,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Self-Supervised Alignment Learning For Medical Image Segmentation",
+    "authors": [
+      "Haofeng Li",
+      "Yiming Ouyang",
+      "Xiang Wan"
+    ],
+    "year": 2024,
+    "abstract": "Recently, self-supervised learning (SSL) methods have been used in pre-training the segmentation models for 2D and 3D medical images. Most of these methods are based on reconstruction, contrastive learning and consistency regularization. However, the spatial correspondence of 2D slices from a 3D medical image has not been fully exploited. In this paper, we propose a novel self-supervised alignment learning framework to pre-train the neural network for medical image segmentation. The proposed framework consists of a new local alignment loss and a global positional loss. We observe that in the same 3D scan, two close 2D slices usually contain similar anatomic structures. Thus, the local alignment loss is proposed to make the pixel-level features of matched structures close to each other. Experimental results show that the proposed alignment learning is competitive with existing self-supervised pre-training approaches on CT and MRI datasets, under the setting of limited annotations.",
+    "url": "https://www.semanticscholar.org/paper/3b9b19f1f919fab290152c5616178fe1a01fc5ac",
+    "venue": "IEEE International Symposium on Biomedical Imaging",
+    "citations": 10,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "GMIM: Self-supervised pre-training for 3D medical image segmentation with adaptive and hierarchical masked image modeling",
+    "authors": [
+      "Liangce Qi",
+      "Zhengang Jiang",
+      "Weili Shi",
+      "Feng Qu",
+      "Guanyuan Feng"
+    ],
+    "year": 2024,
+    "abstract": "Self-supervised pre-training and fully supervised fine-tuning paradigms have received much attention to solve the data annotation problem in deep learning fields. Compared with traditional pre-training on large natural image datasets, medical self-supervised learning methods learn rich representations derived from unlabeled data itself thus avoiding the distribution shift between different image domains. However, nowadays state-of-the-art medical pre-training methods were specifically designed for downstream tasks making them less flexible and difficult to apply to new tasks. In this paper, we propose grid mask image modeling, a flexible and general self-supervised method to pre-train medical vision transformers for 3D medical image segmentation. Our goal is to guide networks to learn the correlations between organs and tissues by reconstructing original images based on partial observations. The relationships are consistent within the human body and invariant to disease type or imaging modality. To achieve this, we design a Siamese framework consisting of an online branch and a target branch. An adaptive and hierarchical masking strategy is employed in the online branch to (1) learn the boundaries or small contextual mutation regions within images; (2) to learn high-level semantic representations from deeper layers of the multiscale encoder. In addition, the target branch provides representations for contrastive learning to further reduce representation redundancy. We evaluate our method through segmentation performance on two public datasets. The experimental results demonstrate our method outperforms other self-supervised methods. Codes are available at https://github.com/mobiletomb/Gmim.",
+    "url": "https://www.semanticscholar.org/paper/13321291305a3d4e7c5d28c9acb04f9a0a247002",
+    "venue": "Comput. Biol. Medicine",
+    "citations": 9,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Overcoming Dimensional Collapse in Self-Supervised Contrastive Learning for Medical Image Segmentation",
+    "authors": [
+      "Jamshid Hassanpour",
+      "V. Srivastav",
+      "Didier Mutter",
+      "N. Padoy"
+    ],
+    "year": 2024,
+    "abstract": "Self-supervised learning (SSL) approaches have achieved great success when the amount of labeled data is limited. Within SSL, models learn robust feature representations by solving pretext tasks. One such pretext task is contrastive learning, which involves forming pairs of similar and dissimilar input samples, guiding the model to distinguish between them. In this work, we investigate the application of contrastive learning to the domain of medical image analysis. Our findings reveal that MoCo v2, a state-of-the-art contrastive learning method, encounters dimensional collapse when applied to medical images. This is attributed to the high degree of inter-image similarity shared between the medical images. To address this, we propose two key contributions: local feature learning and feature decorrelation. Local feature learning improves the ability of the model to focus on the local regions of the image, while feature decorrelation removes the linear dependence among the features. Our experimental findings demonstrate that our contributions significantly enhance the model’s performance in the downstream task of medical segmentation, both in the linear evaluation and full fine-tuning settings. This work illustrates the importance of effectively adapting SSL techniques to the characteristics of medical imaging tasks. The source code will be made publicly available at: https://github.com/CAMMA-public/med-moco",
+    "url": "https://www.semanticscholar.org/paper/9978bea6e54628725a7b451ea0d38a5dad344df8",
+    "venue": "IEEE International Symposium on Biomedical Imaging",
+    "citations": 6,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Multi-Task Self-Supervised Learning for Medical Image Segmentation",
+    "authors": [
+      "Bo Wang",
+      "Hang Zhao",
+      "Xiongfei Li",
+      "Mingjie Tian",
+      "Bo Huang",
+      "Feiyang Yang"
+    ],
+    "year": 2024,
+    "abstract": "Although medical image segmentation has achieved remarkable results with supervised learning, obtaining labeled data remains challenging and costly. To counteract this, we present the MTSPSeg, a multi-task self-supervised learning framework. We establish the dynamic gradient learning rate (DGLR) strategy and the dynamic multi-task loss weight adjustment method (DWL) to relieve potential early convergence and diverse learning difficulties of self-supervised learning. Our method deeply integrates the prior knowledge inherent in medical images, facilitates collaborative learning among tasks, and delves further into the latent information within the images. Experimental results demonstrate that regardless of the proportion of labeled data, our method outperforms baseline models on the KiTS19 and LiTS datasets, achieving state-of-the-art performance on the KiTS19 dataset.",
+    "url": "https://www.semanticscholar.org/paper/161fd4ea7f93a3bbb848117bf35e23e86947c50c",
+    "venue": "IEEE International Conference on Acoustics, Speech, and Signal Processing",
+    "citations": 4,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Semi-Supervised Medical Image Segmentation with Multimodal Data Augmentation and Self-Supervised Learning",
+    "authors": [
+      "Duan Decahng"
+    ],
+    "year": 2024,
+    "abstract": "Medical image segmentation is a critical task in clinical diagnosis and treatment. However, the high cost of acquiring annotated data and the scarcity of labeled datasets have made semi-supervised learning methods a focal point of research in this field. In this paper, we propose a semi-supervised medical image segmentation method that combines multimodal data augmentation, self-supervised pretraining, and pseudo-label generation and correction strategies. By leveraging complementary information from different modalities such as CT and MRI, along with self-supervised pretraining on unlabeled data, our model significantly improves segmentation performance under limited labeled data. Moreover, a confidence-based pseudo-label generation and correction strategy further enhances the label quality during the training process. Experimental results demonstrate that the proposed method outperforms traditional fully-supervised and semi-supervised approaches across multiple medical image segmentation datasets, with notable improvements in segmentation accuracy, especially in scenarios with scarce labeled data. This method provides an effective solution for medical image segmentation tasks and shows great potential for widespread application, particularly in medical image analysis with limited annotated data.",
+    "url": "https://www.semanticscholar.org/paper/23d9602ba8996f9cd98e1bc294e73dab76c6cd5b",
+    "venue": "2024 21st International Computer Conference on Wavelet Active Media Technology and Information Processing (ICCWAMTIP)",
+    "citations": 3,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Dense Self-Supervised Learning for Medical Image Segmentation",
+    "authors": [
+      "Maxime Seince",
+      "Loic Le Folgoc",
+      "Luiz Souza",
+      "Elsa Angelini"
+    ],
+    "year": 2024,
+    "abstract": "Deep learning has revolutionized medical image segmentation, but it relies heavily on high-quality annotations. The time, cost and expertise required to label images at the pixel-level for each new task has slowed down widespread adoption of the paradigm. We propose Pix2Rep, a self-supervised learning (SSL) approach for few-shot segmentation, that reduces the manual annotation burden by learning powerful pixel-level representations directly from unlabeled images. Pix2Rep is a novel pixel-level loss and pre-training paradigm for contrastive SSL on whole images. It is applied to generic encoder-decoder deep learning backbones (e.g., U-Net). Whereas most SSL methods enforce invariance of the learned image-level representations under intensity and spatial image augmentations, Pix2Rep enforces equivariance of the pixel-level representations. We demonstrate the framework on a task of cardiac MRI segmentation. Results show improved performance compared to existing semi- and self-supervised approaches; and a 5-fold reduction in the annotation burden for equivalent performance versus a fully supervised U-Net baseline. This includes a 30% (resp. 31%) DICE improvement for one-shot segmentation under linear-probing (resp. fine-tuning). Finally, we also integrate the novel Pix2Rep concept with the Barlow Twins non-contrastive SSL, which leads to even better segmentation performance.",
+    "url": "https://www.semanticscholar.org/paper/1f714bdb1a1696c1d0ab51bcede1f72fa53d778d",
+    "venue": "International Conference on Medical Imaging with Deep Learning",
+    "citations": 3,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  },
+  {
+    "title": "Multi-ConDoS: Multimodal Contrastive Domain Sharing Generative Adversarial Networks for Self-Supervised Medical Image Segmentation",
+    "authors": [
+      "Jiaojiao Zhang",
+      "Shuo Zhang",
+      "Xiaoqian Shen",
+      "Thomas Lukasiewicz",
+      "Zhenghua Xu"
+    ],
+    "year": 2023,
+    "abstract": "Existing self-supervised medical image segmentation usually encounters the domain shift problem (i.e., the input distribution of pre-training is different from that of fine-tuning) and/or the multimodality problem (i.e., it is based on single-modal data only and cannot utilize the fruitful multimodal information of medical images). To solve these problems, in this work, we propose multimodal contrastive domain sharing (Multi-ConDoS) generative adversarial networks to achieve effective multimodal contrastive self-supervised medical image segmentation. Compared to the existing self-supervised approaches, Multi-ConDoS has the following three advantages: (i) it utilizes multimodal medical images to learn more comprehensive object features via multimodal contrastive learning; (ii) domain translation is achieved by integrating the cyclic learning strategy of CycleGAN and the cross-domain translation loss of Pix2Pix; (iii) novel domain sharing layers are introduced to learn not only domain-specific but also domain-sharing information from the multimodal medical images. Extensive experiments on two publicly multimodal medical image segmentation datasets show that, with only 5% (resp., 10%) of labeled data, Multi-ConDoS not only greatly outperforms the state-of-the-art self-supervised and semi-supervised medical image segmentation baselines with the same ratio of labeled data, but also achieves similar (sometimes even better) performances as fully supervised segmentation methods with 50% (resp., 100%) of labeled data, which thus proves that our work can achieve superior segmentation performances with very low labeling workload. Furthermore, ablation studies prove that the above three improvements are all effective and essential for Multi-ConDoS to achieve this very superior performance.",
+    "url": "https://www.semanticscholar.org/paper/a67b22061aea15a5aecd20df5e0b4f8d4301b561",
+    "venue": "IEEE Transactions on Medical Imaging",
+    "citations": 58,
+    "source": "Semantic Scholar",
+    "keywords_found": [
+      "medical image segmentation",
+      "self-supervised"
+    ]
+  }
+]

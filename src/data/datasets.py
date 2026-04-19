@@ -2,19 +2,28 @@
 Medical Segmentation Decathlon — MONAI-based dataset loaders.
 
 Tasks used in this project (all from http://medicaldecathlon.com/):
-  Task03_Liver    — CT,  2 classes (liver, tumour)   → we use binary liver mask
-  Task07_Pancreas — CT,  2 classes (pancreas, mass)  → we use binary pancreas mask
+  Task03_Liver    — CT,  2 classes (liver, tumour)   → binary liver mask
+  Task07_Pancreas — CT,  2 classes (pancreas, mass)  → binary pancreas mask
   Task02_Heart    — MRI, 1 class  (left atrium)
 
-Each task is treated as a separate continual learning step.
+Kaggle dataset slugs (add each as a separate dataset input):
+  liver:    vivekprajapati2048/medical-segmentation-decathlon-3dliver
+  heart:    vivekprajapati2048/medical-segmentation-decathlon-heart
+  pancreas: eliasmarcon/pancreas
+
+Each Kaggle dataset mounts at /kaggle/input/<slug>/.
+The folder layout inside may be either:
+  (A) /kaggle/input/<slug>/Task03_Liver/imagesTr/   (task subfolder preserved)
+  (B) /kaggle/input/<slug>/imagesTr/                (files at root)
+resolve_task_dir() handles both automatically.
 """
 
 import os
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Dict, Optional
 
 import numpy as np
-from monai.data import Dataset, DataLoader, CacheDataset
+from monai.data import DataLoader, CacheDataset
 from monai.transforms import (
     Compose, LoadImaged, EnsureChannelFirstd, Spacingd,
     Orientationd, ScaleIntensityRanged, CropForegroundd,
@@ -27,70 +36,163 @@ from monai.transforms import (
 
 TASKS = {
     "liver": {
-        "task_id": 0,
-        "folder": "Task03_Liver",
-        "modality": "CT",
-        "spacing": (1.5, 1.5, 2.0),
+        "task_id":       0,
+        "task_folder":   "Task03_Liver",
+        "kaggle_slug":   "vivekprajapati2048/medical-segmentation-decathlon-3dliver",
+        "kaggle_input":  "medical-segmentation-decathlon-3dliver",
+        "modality":      "CT",
+        "spacing":       (1.5, 1.5, 2.0),
         "intensity_range": (-175, 250),
-        "label_value": 1,
+        "label_value":   1,
+        "n_train_approx": 131,   # MSD Task03: 131 training volumes
     },
     "pancreas": {
-        "task_id": 1,
-        "folder": "Task07_Pancreas",
-        "modality": "CT",
-        "spacing": (1.5, 1.5, 2.0),
+        "task_id":       1,
+        "task_folder":   "Task07_Pancreas",
+        "kaggle_slug":   "eliasmarcon/pancreas",
+        "kaggle_input":  "pancreas",
+        "modality":      "CT",
+        "spacing":       (1.5, 1.5, 2.0),
         "intensity_range": (-125, 275),
-        "label_value": 1,
+        "label_value":   1,
+        "n_train_approx": 281,   # MSD Task07: 281 training volumes
     },
     "heart": {
-        "task_id": 2,
-        "folder": "Task02_Heart",
-        "modality": "MRI",
-        "spacing": (1.25, 1.25, 1.37),
-        "intensity_range": None,   # MRI: use NormalizeIntensity
-        "label_value": 1,
+        "task_id":       2,
+        "task_folder":   "Task02_Heart",
+        "kaggle_slug":   "vivekprajapati2048/medical-segmentation-decathlon-heart",
+        "kaggle_input":  "medical-segmentation-decathlon-heart",
+        "modality":      "MRI",
+        "spacing":       (1.25, 1.25, 1.37),
+        "intensity_range": None,
+        "label_value":   1,
+        "n_train_approx": 20,    # MSD Task02: 20 training volumes
     },
 }
 
-TASK_ORDER = ["liver", "pancreas", "heart"]   # sequential training order
+TASK_ORDER = ["liver", "pancreas", "heart"]
 
 
-def get_file_list(data_root: str, task_name: str) -> Tuple[List[dict], List[dict]]:
-    """Return (train_files, val_files) dicts for a given task."""
-    task_cfg = TASKS[task_name]
-    task_dir = Path(data_root) / task_cfg["folder"]
-    img_dir   = task_dir / "imagesTr"
-    lbl_dir   = task_dir / "labelsTr"
+# ── Path resolution: handles both Kaggle layout variants ──────────────────────
 
-    cases = sorted([f.stem.replace(".nii", "") for f in img_dir.glob("*.nii.gz")])
+def resolve_task_dir(task_root: str, task_name: str) -> Path:
+    """
+    Given the mounted dataset root (e.g. /kaggle/input/medical-segmentation-decathlon-heart),
+    find the actual directory containing imagesTr/.
+
+    Handles two layouts:
+      (A) task_root/Task02_Heart/imagesTr/   ← task subfolder present
+      (B) task_root/imagesTr/               ← files directly at root
+    Raises FileNotFoundError if neither exists.
+    """
+    root = Path(task_root)
+    task_folder = TASKS[task_name]["task_folder"]
+
+    # Layout A: task subfolder
+    candidate_a = root / task_folder / "imagesTr"
+    if candidate_a.exists():
+        return root / task_folder
+
+    # Layout B: root directly contains imagesTr
+    candidate_b = root / "imagesTr"
+    if candidate_b.exists():
+        return root
+
+    raise FileNotFoundError(
+        f"Cannot find imagesTr/ in '{task_root}'.\n"
+        f"Tried:\n  {candidate_a}\n  {candidate_b}\n"
+        f"Make sure you added the dataset '{TASKS[task_name]['kaggle_slug']}' "
+        f"as a Kaggle input."
+    )
+
+
+def build_task_roots(base: str) -> Dict[str, str]:
+    """
+    Build per-task roots from a single base path (for local use where all
+    task folders live under one directory, e.g. /data/decathlon/Task03_Liver).
+    """
+    return dict.fromkeys(TASKS, base)
+
+
+def kaggle_task_roots() -> Dict[str, str]:
+    """Return the standard /kaggle/input/<slug> paths for each task."""
+    return {
+        name: f"/kaggle/input/{cfg['kaggle_input']}"
+        for name, cfg in TASKS.items()
+    }
+
+
+NII_GZ = "*.nii.gz"
+
+# ── Dataset verification ───────────────────────────────────────────────────────
+
+def verify_datasets(task_roots: Dict[str, str]) -> bool:
+    """Print a verification table and return True only if all tasks are found."""
+    print("\n── Dataset verification ──────────────────────────────────────")
+    all_ok = True
+    for task_name in TASK_ORDER:
+        root = task_roots.get(task_name, "")
+        try:
+            task_dir = resolve_task_dir(root, task_name)
+            n_imgs = len(list((task_dir / "imagesTr").glob(NII_GZ)))
+            n_lbls = len(list((task_dir / "labelsTr").glob(NII_GZ)))
+            approx = TASKS[task_name]["n_train_approx"]
+            ok = "✅" if n_imgs > 0 else "❌"
+            warn = f"  (expected ~{approx})" if n_imgs != approx else ""
+            print(f"  {ok}  {task_name:<10}  imgs={n_imgs:<4}  lbls={n_lbls:<4}"
+                  f"  path={task_dir}{warn}")
+        except FileNotFoundError:
+            print(f"  ❌  {task_name:<10}  NOT FOUND — {TASKS[task_name]['kaggle_slug']}")
+            all_ok = False
+    print("─────────────────────────────────────────────────────────────\n")
+    return all_ok
+
+
+# ── File list builders ────────────────────────────────────────────────────────
+
+def get_file_list(task_roots: Dict[str, str],
+                  task_name: str) -> Tuple[List[dict], List[dict]]:
+    """Return (train_files, val_files) for one task."""
+    task_dir = resolve_task_dir(task_roots[task_name], task_name)
+    img_dir  = task_dir / "imagesTr"
+    lbl_dir  = task_dir / "labelsTr"
+
+    cases = sorted([f.stem.replace(".nii", "") for f in img_dir.glob(NII_GZ)])
     files = [
         {"image": str(img_dir / f"{c}.nii.gz"),
          "label": str(lbl_dir / f"{c}.nii.gz"),
-         "task":  task_cfg["task_id"]}
+         "task":  TASKS[task_name]["task_id"]}
         for c in cases
     ]
 
-    # 80/20 split (fixed seed)
-    rng = np.random.default_rng(42)
-    idx = rng.permutation(len(files))
-    split = int(0.8 * len(files))
+    rng   = np.random.default_rng(42)
+    idx   = rng.permutation(len(files))
+    split = max(1, int(0.8 * len(files)))
     return [files[i] for i in idx[:split]], [files[i] for i in idx[split:]]
 
 
-def get_unlabelled_files(data_root: str) -> List[dict]:
-    """Collect all images (ignoring labels) from all tasks for SSL pretraining."""
+def get_unlabelled_files(task_roots: Dict[str, str]) -> List[dict]:
+    """Collect all images from all tasks for SSL pretraining (no labels needed)."""
     all_files = []
-    for task_name, cfg in TASKS.items():
-        img_dir = Path(data_root) / cfg["folder"] / "imagesTr"
-        all_files += [{"image": str(p)} for p in sorted(img_dir.glob("*.nii.gz"))]
+    for task_name in TASK_ORDER:
+        try:
+            task_dir = resolve_task_dir(task_roots[task_name], task_name)
+            all_files += [
+                {"image": str(p)}
+                for p in sorted((task_dir / "imagesTr").glob(NII_GZ))
+            ]
+        except FileNotFoundError:
+            print(f"  ⚠️  Skipping {task_name} for SSL pretraining: {e}")
     return all_files
 
 
+# ── Transforms ────────────────────────────────────────────────────────────────
+
 def _ct_transforms(task_name: str, train: bool) -> Compose:
-    cfg = TASKS[task_name]
+    cfg    = TASKS[task_name]
     a_min, a_max = cfg["intensity_range"]
-    keys = ["image", "label"]
-    base = [
+    keys   = ["image", "label"]
+    base   = [
         LoadImaged(keys=keys),
         EnsureChannelFirstd(keys=keys),
         Spacingd(keys=keys, pixdim=cfg["spacing"], mode=("bilinear", "nearest")),
@@ -112,7 +214,7 @@ def _ct_transforms(task_name: str, train: bool) -> Compose:
 
 
 def _mri_transforms(task_name: str, train: bool) -> Compose:
-    cfg = TASKS[task_name]
+    cfg  = TASKS[task_name]
     keys = ["image", "label"]
     base = [
         LoadImaged(keys=keys),
@@ -139,17 +241,24 @@ def get_transforms(task_name: str, train: bool) -> Compose:
     return _mri_transforms(task_name, train)
 
 
-def get_loaders(data_root: str, task_name: str,
+# ── DataLoader builder ────────────────────────────────────────────────────────
+
+def get_loaders(task_roots: Dict[str, str],
+                task_name:  str,
                 batch_size: int = 2,
                 num_workers: int = 4,
                 cache_rate: float = 0.1) -> Tuple[DataLoader, DataLoader]:
-    train_files, val_files = get_file_list(data_root, task_name)
-    train_ds = CacheDataset(train_files, transform=get_transforms(task_name, train=True),
+    train_files, val_files = get_file_list(task_roots, task_name)
+    train_ds = CacheDataset(train_files,
+                            transform=get_transforms(task_name, train=True),
                             cache_rate=cache_rate)
-    val_ds   = CacheDataset(val_files,   transform=get_transforms(task_name, train=False),
+    val_ds   = CacheDataset(val_files,
+                            transform=get_transforms(task_name, train=False),
                             cache_rate=1.0)
     train_loader = DataLoader(train_ds, batch_size=batch_size,
-                              shuffle=True,  num_workers=num_workers, pin_memory=True)
+                              shuffle=True,  num_workers=num_workers,
+                              pin_memory=True)
     val_loader   = DataLoader(val_ds,   batch_size=1,
-                              shuffle=False, num_workers=num_workers, pin_memory=True)
+                              shuffle=False, num_workers=num_workers,
+                              pin_memory=True)
     return train_loader, val_loader

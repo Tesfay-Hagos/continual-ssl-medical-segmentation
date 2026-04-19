@@ -8,8 +8,10 @@
 #
 # ---
 # ### Before running
-# 1. Add **Medical Segmentation Decathlon** as a Kaggle dataset input
-#    (Tasks: Task02_Heart, Task03_Liver, Task07_Pancreas)
+# 1. Add **three separate Kaggle dataset inputs**:
+#    - `vivekprajapati2048/medical-segmentation-decathlon-heart` (Heart / Task02)
+#    - `vivekprajapati2048/medical-segmentation-decathlon-3dliver` (Liver / Task03)
+#    - `eliasmarcon/pancreas` (Pancreas / Task07)
 # 2. Enable GPU accelerator (P100 or T4)
 # 3. Run all cells top-to-bottom
 
@@ -27,13 +29,10 @@ ON_KAGGLE = os.path.exists("/kaggle/working")
 REPO_URL  = "https://github.com/Tesfay-Hagos/continual-ssl-medical-segmentation.git"
 REPO_DIR  = "/kaggle/working/project" if ON_KAGGLE else os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "..", ".."))
-DATA_ROOT = ("/kaggle/input/medical-segmentation-decathlon"
-             if ON_KAGGLE else os.environ.get("DATA_ROOT", "/data/decathlon"))
 OUT_DIR   = "/kaggle/working/checkpoints" if ON_KAGGLE else "/tmp/cssl_ckpts"
 
 print(f"ON_KAGGLE : {ON_KAGGLE}")
 print(f"REPO_DIR  : {REPO_DIR}")
-print(f"DATA_ROOT : {DATA_ROOT}")
 print(f"OUT_DIR   : {OUT_DIR}")
 
 # %%
@@ -52,7 +51,8 @@ else:
 if ON_KAGGLE:
     subprocess.run(
         [sys.executable, "-m", "pip", "install",
-         "monai[all]", "nibabel", "scipy", "scikit-image", "pyyaml", "--quiet"],
+         "monai[all]", "nibabel", "scipy", "scikit-image", "pyyaml",
+         "wandb", "--quiet"],
         check=True
     )
     print("Dependencies installed.")
@@ -67,6 +67,10 @@ if SRC_DIR not in sys.path:
 
 import torch
 import numpy as np
+from data.datasets import kaggle_task_roots, build_task_roots, verify_datasets
+
+TASK_ROOTS = (kaggle_task_roots() if ON_KAGGLE
+              else build_task_roots(os.environ.get("DATA_ROOT", "/data/decathlon")))
 
 gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU only"
 print(f"PyTorch  : {torch.__version__}")
@@ -76,33 +80,29 @@ print(f"CUDA     : {torch.version.cuda}")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 os.makedirs(OUT_DIR, exist_ok=True)
 
+# %%
+# WandB — set WANDB_API_KEY in Kaggle secrets (Add-ons → Secrets) or run wandb.login() interactively
+import wandb
+
+WANDB_PROJECT = "cssl-medical"
+try:
+    wandb.login()
+    USE_WANDB = True
+    print(f"WandB logged in. Project: {WANDB_PROJECT}")
+except Exception:
+    USE_WANDB = False
+    print("WandB login failed — running without logging.")
+
 # %% [markdown]
 # ## 1 — Dataset verification
 
 # %%
-REQUIRED_TASKS = {
-    "liver":    "Task03_Liver",
-    "pancreas": "Task07_Pancreas",
-    "heart":    "Task02_Heart",
-}
-
-dataset_ok = True
-for name, folder in REQUIRED_TASKS.items():
-    img_dir = os.path.join(DATA_ROOT, folder, "imagesTr")
-    lbl_dir = os.path.join(DATA_ROOT, folder, "labelsTr")
-    n_imgs  = len(os.listdir(img_dir))  if os.path.exists(img_dir)  else 0
-    n_lbls  = len(os.listdir(lbl_dir))  if os.path.exists(lbl_dir)  else 0
-    status  = "✅" if n_imgs > 0 else "❌ MISSING"
-    print(f"  {status}  {folder:<22}  images={n_imgs:<4}  labels={n_lbls}")
-    if n_imgs == 0:
-        dataset_ok = False
-
-if not dataset_ok:
+if not verify_datasets(TASK_ROOTS):
     raise RuntimeError(
-        "One or more task folders are missing. "
-        "Add 'Medical Segmentation Decathlon' as a Kaggle dataset input."
+        "One or more datasets are missing. "
+        "Add all three Kaggle dataset inputs (heart, liver, pancreas)."
     )
-print("\nDataset OK — all three tasks found.")
+print("Dataset OK — all three tasks found.")
 
 # %% [markdown]
 # ## 2 — SparK Pretraining
@@ -116,7 +116,7 @@ print("\nDataset OK — all three tasks found.")
 import yaml
 from pretraining.pretrain import pretrain
 
-PRETRAIN_CKPT = os.path.join(OUT_DIR, "pretrain", "pretrained_encoder_best.pth")
+PRETRAIN_CKPT = os.path.join(OUT_DIR, "pretrain", "best.pth")
 
 if os.path.exists(PRETRAIN_CKPT):
     print(f"Pretrained checkpoint already exists:\n  {PRETRAIN_CKPT}")
@@ -126,11 +126,14 @@ else:
     with open(cfg_path) as f:
         pretrain_cfg = yaml.safe_load(f)
 
-    pretrain_cfg["data_root"]  = DATA_ROOT
-    pretrain_cfg["output_dir"] = os.path.join(OUT_DIR, "pretrain")
-    pretrain_cfg["epochs"]     = 100
-    pretrain_cfg["batch_size"] = 2
-    pretrain_cfg["num_workers"] = 2 if ON_KAGGLE else 0
+    pretrain_cfg["task_roots"]     = TASK_ROOTS
+    pretrain_cfg["output_dir"]     = os.path.join(OUT_DIR, "pretrain")
+    pretrain_cfg["epochs"]         = 100
+    pretrain_cfg["batch_size"]     = 2
+    pretrain_cfg["num_workers"]    = 2 if ON_KAGGLE else 0
+    pretrain_cfg["use_wandb"]      = USE_WANDB
+    pretrain_cfg["wandb_project"]  = WANDB_PROJECT
+    pretrain_cfg["wandb_run"]      = "spark-pretrain"
 
     pretrain(pretrain_cfg)
     print(f"\nPretraining complete. Checkpoint: {PRETRAIN_CKPT}")
@@ -148,7 +151,7 @@ from scripts.train_continual import run as run_continual
 baseline_cfg = {
     "strategy":        "none",
     "use_pretrained":  False,
-    "data_root":       DATA_ROOT,
+    "task_roots":      TASK_ROOTS,
     "output_dir":      os.path.join(OUT_DIR, "baseline_finetune"),
     "task_order":      ["liver", "pancreas", "heart"],
     "channels":        [32, 64, 128, 256, 512],
@@ -159,6 +162,9 @@ baseline_cfg = {
     "weight_decay":    1e-5,
     "num_workers":     2 if ON_KAGGLE else 0,
     "cache_rate":      0.1,
+    "use_wandb":       USE_WANDB,
+    "wandb_project":   WANDB_PROJECT,
+    "wandb_run":       "baseline_finetune",
 }
 
 print("=== BASELINE: Fine-tune only (catastrophic forgetting) ===")
@@ -179,14 +185,17 @@ with open(cfg_path) as f:
     ewc_base = yaml.safe_load(f)
 
 ewc_base.update({
-    "data_root":    DATA_ROOT,
-    "num_workers":  2 if ON_KAGGLE else 0,
+    "task_roots":    TASK_ROOTS,
+    "num_workers":   2 if ON_KAGGLE else 0,
+    "use_wandb":     USE_WANDB,
+    "wandb_project": WANDB_PROJECT,
 })
 
 # 4a — EWC, no pretraining
 ewc_no_ssl = {**ewc_base,
               "use_pretrained": False,
-              "output_dir": os.path.join(OUT_DIR, "ewc_no_ssl")}
+              "wandb_run":      "ewc_no_ssl",
+              "output_dir":     os.path.join(OUT_DIR, "ewc_no_ssl")}
 print("=== EWC — no pretraining ===")
 run_continual(ewc_no_ssl)
 
@@ -195,6 +204,7 @@ run_continual(ewc_no_ssl)
 ewc_ssl = {**ewc_base,
            "use_pretrained":  True,
            "pretrained_ckpt": PRETRAIN_CKPT,
+           "wandb_run":       "ewc_ssl",
            "output_dir":      os.path.join(OUT_DIR, "ewc_ssl")}
 print("=== EWC — SparK pretrained ===")
 run_continual(ewc_ssl)
@@ -211,14 +221,17 @@ with open(cfg_path) as f:
     lwf_base = yaml.safe_load(f)
 
 lwf_base.update({
-    "data_root":   DATA_ROOT,
-    "num_workers": 2 if ON_KAGGLE else 0,
+    "task_roots":    TASK_ROOTS,
+    "num_workers":   2 if ON_KAGGLE else 0,
+    "use_wandb":     USE_WANDB,
+    "wandb_project": WANDB_PROJECT,
 })
 
 # 5a — LwF, no pretraining
 lwf_no_ssl = {**lwf_base,
               "use_pretrained": False,
-              "output_dir": os.path.join(OUT_DIR, "lwf_no_ssl")}
+              "wandb_run":      "lwf_no_ssl",
+              "output_dir":     os.path.join(OUT_DIR, "lwf_no_ssl")}
 print("=== LwF — no pretraining ===")
 run_continual(lwf_no_ssl)
 
@@ -227,6 +240,7 @@ run_continual(lwf_no_ssl)
 lwf_ssl = {**lwf_base,
            "use_pretrained":  True,
            "pretrained_ckpt": PRETRAIN_CKPT,
+           "wandb_run":       "lwf_ssl",
            "output_dir":      os.path.join(OUT_DIR, "lwf_ssl")}
 print("=== LwF — SparK pretrained ===")
 run_continual(lwf_ssl)
@@ -245,14 +259,17 @@ with open(cfg_path) as f:
     replay_base = yaml.safe_load(f)
 
 replay_base.update({
-    "data_root":   DATA_ROOT,
-    "num_workers": 2 if ON_KAGGLE else 0,
+    "task_roots":    TASK_ROOTS,
+    "num_workers":   2 if ON_KAGGLE else 0,
+    "use_wandb":     USE_WANDB,
+    "wandb_project": WANDB_PROJECT,
 })
 
 # 6a — Replay, no pretraining
 replay_no_ssl = {**replay_base,
                  "use_pretrained": False,
-                 "output_dir": os.path.join(OUT_DIR, "replay_no_ssl")}
+                 "wandb_run":      "replay_no_ssl",
+                 "output_dir":     os.path.join(OUT_DIR, "replay_no_ssl")}
 print("=== Replay — no pretraining ===")
 run_continual(replay_no_ssl)
 
@@ -261,6 +278,7 @@ run_continual(replay_no_ssl)
 replay_ssl = {**replay_base,
               "use_pretrained":  True,
               "pretrained_ckpt": PRETRAIN_CKPT,
+              "wandb_run":       "replay_ssl",
               "output_dir":      os.path.join(OUT_DIR, "replay_ssl")}
 print("=== Replay — SparK pretrained ===")
 run_continual(replay_ssl)
@@ -275,6 +293,7 @@ for buf_size in [50, 100, 200, 500]:
            "use_pretrained":  True,
            "pretrained_ckpt": PRETRAIN_CKPT,
            "buffer_capacity": buf_size,
+           "wandb_run":       f"replay_buf{buf_size}",
            "output_dir":      os.path.join(OUT_DIR, f"replay_buf{buf_size}")}
     print(f"\n=== Replay buf={buf_size} ===")
     run_continual(cfg)
@@ -300,7 +319,7 @@ os.makedirs(multitask_out, exist_ok=True)
 # Build combined training set
 all_train, all_val = [], {}
 for task_name in ["liver", "pancreas", "heart"]:
-    tr_files, val_files = get_file_list(DATA_ROOT, task_name)
+    tr_files, val_files = get_file_list(TASK_ROOTS, task_name)
     all_train += tr_files
     val_ds = CacheDataset(val_files,
                           transform=get_transforms(task_name, train=False),

@@ -1,5 +1,5 @@
 # SparK pretraining configuration
-data_root:       "/kaggle/input/medical-segmentation-decathlon"
+# task_roots defined in kaggle_run.py
 output_dir:      "/kaggle/working/checkpoints/pretrain"
 
 # Model
