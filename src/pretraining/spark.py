@@ -68,7 +68,14 @@ def _encode_down_path(unet_model: nn.Sequential,
 
     We recurse into each SkipConnection.submodule and stop before UpSample,
     returning the bottleneck feature map (B, cN, D', H', W').
+
+    At the deepest level MONAI's SkipConnection.submodule is a bare ResidualUnit
+    (not a Sequential), so we handle that as the bottleneck base case.
     """
+    # Bottleneck base case: deepest submodule is a bare module, not Sequential
+    if not isinstance(unet_model, nn.Sequential):
+        return unet_model(x)
+
     out = unet_model[0](x)          # apply top encoder block
 
     if len(unet_model) > 1:
