@@ -14,8 +14,8 @@ import torch.optim as optim
 import yaml
 from monai.data import CacheDataset
 from monai.transforms import (Compose, EnsureChannelFirstd, LoadImaged,
-                               NormalizeIntensityd, Orientationd,
-                               RandFlipd, RandSpatialCropd, Spacingd, ToTensord)
+                               NormalizeIntensityd, Orientationd, RandFlipd,
+                               RandSpatialCropd, SpatialPadd, Spacingd, ToTensord)
 from torch.utils.data import DataLoader
 
 from data.datasets import get_unlabelled_files
@@ -36,6 +36,8 @@ def get_ssl_transforms(patch_size: int = 96) -> Compose:
         Spacingd(keys=["image"], pixdim=(1.5, 1.5, 2.0), mode="bilinear"),
         Orientationd(keys=["image"], axcodes="RAS"),
         NormalizeIntensityd(keys=["image"], nonzero=True),
+        SpatialPadd(keys=["image"],
+                    spatial_size=(patch_size, patch_size, patch_size)),
         RandSpatialCropd(keys=["image"],
                          roi_size=(patch_size, patch_size, patch_size),
                          random_size=False),
