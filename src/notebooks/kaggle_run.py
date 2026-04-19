@@ -83,17 +83,22 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # %%
-# WandB — set WANDB_API_KEY in Kaggle secrets (Add-ons → Secrets) or run wandb.login() interactively
+# WandB — reads 'wandb_token' from Kaggle Secrets (Add-ons → Secrets → wandb_token)
 import wandb
 
 WANDB_PROJECT = "cssl-medical"
 try:
-    wandb.login()
+    if ON_KAGGLE:
+        from kaggle_secrets import UserSecretsClient
+        _key = UserSecretsClient().get_secret("wandb_token")
+        wandb.login(key=_key)
+    else:
+        wandb.login()          # uses WANDB_API_KEY env var locally
     USE_WANDB = True
     print(f"WandB logged in. Project: {WANDB_PROJECT}")
-except Exception:
+except Exception as e:
     USE_WANDB = False
-    print("WandB login failed — running without logging.")
+    print(f"WandB login failed ({e}) — running without logging.")
 
 # %% [markdown]
 # ## 1 — Dataset verification
