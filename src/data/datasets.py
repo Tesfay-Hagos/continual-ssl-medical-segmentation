@@ -134,8 +134,8 @@ _EXT_NII = ".nii"
 
 
 def _real_nii(paths: List[Path]) -> List[Path]:
-    """Filter out macOS resource-fork files (._) from a path list."""
-    return [p for p in paths if not p.name.startswith("._")]
+    """Keep only real files — filter out directories and macOS resource-fork (._) entries."""
+    return [p for p in paths if p.is_file() and not p.name.startswith("._")]
 
 
 def glob_nii(directory: Path) -> List[Path]:
