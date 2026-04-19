@@ -1,7 +1,10 @@
 PY_NOTEBOOK  := src/notebooks/kaggle_run.py
 IPYNB        := src/notebooks/kaggle_run.ipynb
 
-.PHONY: notebook nb lint push-nb help
+-include .env
+export
+
+.PHONY: notebook nb lint push-nb env-check help
 
 ## Convert kaggle_run.py → kaggle_run.ipynb (primary target)
 notebook nb: $(PY_NOTEBOOK)
@@ -27,10 +30,17 @@ push-nb: notebook
 	git commit -m "Update Kaggle notebook (auto-generated from kaggle_run.py)"
 	git push
 
+## Verify required env vars are set
+env-check:
+	@test -n "$$KAGGLE_API_TOKEN" || (echo "❌  KAGGLE_API_TOKEN not set — copy .env.example to .env"; exit 1)
+	@echo "✅  KAGGLE_API_TOKEN set"
+	@test -n "$$WANDB_API_KEY" && echo "✅  WANDB_API_KEY set" || echo "⚠️   WANDB_API_KEY not set (WandB logging disabled)"
+
 help:
 	@echo ""
 	@echo "  make notebook   Convert kaggle_run.py → kaggle_run.ipynb"
 	@echo "  make sync-py    Sync .ipynb outputs back to .py"
 	@echo "  make lint       Dry-run syntax + logic checks on .py"
 	@echo "  make push-nb    lint + notebook + git commit + push"
+	@echo "  make env-check  Verify .env credentials are loaded"
 	@echo ""

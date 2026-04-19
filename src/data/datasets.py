@@ -9,7 +9,10 @@ Tasks used in this project (all from http://medicaldecathlon.com/):
 Kaggle dataset slugs (add each as a separate dataset input):
   liver:    vivekprajapati2048/medical-segmentation-decathlon-3dliver
   heart:    vivekprajapati2048/medical-segmentation-decathlon-heart
-  pancreas: eliasmarcon/pancreas
+  pancreas: lnguynquangbnh/task07-pancreas
+
+Note: all three Kaggle datasets store files as .nii (not .nii.gz).
+glob_nii() handles both extensions automatically.
 
 Each Kaggle dataset mounts at /kaggle/input/<slug>/.
 The folder layout inside may be either:
@@ -20,7 +23,7 @@ resolve_task_dir() handles both automatically.
 
 import os
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional
+from typing import Dict, List, Tuple
 
 import numpy as np
 from monai.data import DataLoader, CacheDataset
@@ -49,8 +52,8 @@ TASKS = {
     "pancreas": {
         "task_id":       1,
         "task_folder":   "Task07_Pancreas",
-        "kaggle_slug":   "eliasmarcon/pancreas",
-        "kaggle_input":  "pancreas",
+        "kaggle_slug":   "lnguynquangbnh/task07-pancreas",
+        "kaggle_input":  "task07-pancreas",
         "modality":      "CT",
         "spacing":       (1.5, 1.5, 2.0),
         "intensity_range": (-125, 275),
@@ -122,7 +125,15 @@ def kaggle_task_roots() -> Dict[str, str]:
     }
 
 
-NII_GZ = "*.nii.gz"
+_EXT_GZ  = ".nii.gz"
+_EXT_NII = ".nii"
+
+
+def glob_nii(directory: Path) -> List[Path]:
+    """Glob NIfTI files from a directory — tries .nii.gz first, falls back to .nii."""
+    gz = sorted(directory.glob(f"*{_EXT_GZ}"))
+    return gz if gz else sorted(directory.glob(f"*{_EXT_NII}"))
+
 
 # ── Dataset verification ───────────────────────────────────────────────────────
 
@@ -134,8 +145,8 @@ def verify_datasets(task_roots: Dict[str, str]) -> bool:
         root = task_roots.get(task_name, "")
         try:
             task_dir = resolve_task_dir(root, task_name)
-            n_imgs = len(list((task_dir / "imagesTr").glob(NII_GZ)))
-            n_lbls = len(list((task_dir / "labelsTr").glob(NII_GZ)))
+            n_imgs = len(glob_nii(task_dir / "imagesTr"))
+            n_lbls = len(glob_nii(task_dir / "labelsTr"))
             approx = TASKS[task_name]["n_train_approx"]
             ok = "✅" if n_imgs > 0 else "❌"
             warn = f"  (expected ~{approx})" if n_imgs != approx else ""
@@ -157,10 +168,14 @@ def get_file_list(task_roots: Dict[str, str],
     img_dir  = task_dir / "imagesTr"
     lbl_dir  = task_dir / "labelsTr"
 
-    cases = sorted([f.stem.replace(".nii", "") for f in img_dir.glob(NII_GZ)])
+    img_files = glob_nii(img_dir)
+    ext       = img_files[0].suffix if img_files else _EXT_GZ
+    if ext == ".gz":                         # Path.suffix of "foo.nii.gz" is ".gz"
+        ext = _EXT_GZ
+    cases = [f.name.replace(_EXT_GZ, "").replace(_EXT_NII, "") for f in img_files]
     files = [
-        {"image": str(img_dir / f"{c}.nii.gz"),
-         "label": str(lbl_dir / f"{c}.nii.gz"),
+        {"image": str(img_dir / f"{c}{ext}"),
+         "label": str(lbl_dir / f"{c}{ext}"),
          "task":  TASKS[task_name]["task_id"]}
         for c in cases
     ]
@@ -177,12 +192,9 @@ def get_unlabelled_files(task_roots: Dict[str, str]) -> List[dict]:
     for task_name in TASK_ORDER:
         try:
             task_dir = resolve_task_dir(task_roots[task_name], task_name)
-            all_files += [
-                {"image": str(p)}
-                for p in sorted((task_dir / "imagesTr").glob(NII_GZ))
-            ]
+            all_files += [{"image": str(p)} for p in glob_nii(task_dir / "imagesTr")]
         except FileNotFoundError:
-            print(f"  ⚠️  Skipping {task_name} for SSL pretraining: {e}")
+            print(f"  ⚠️  Skipping {task_name} for SSL pretraining (not found)")
     return all_files
 
 
