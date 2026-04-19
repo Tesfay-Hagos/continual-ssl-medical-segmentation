@@ -118,9 +118,13 @@ def build_task_roots(base: str) -> Dict[str, str]:
 
 
 def kaggle_task_roots() -> Dict[str, str]:
-    """Return the standard /kaggle/input/<slug> paths for each task."""
+    """Return Kaggle input paths for each task.
+
+    Kaggle now mounts datasets at /kaggle/input/datasets/<username>/<dataset>/
+    using the full slug (e.g. vivekprajapati2048/medical-segmentation-decathlon-heart).
+    """
     return {
-        name: f"/kaggle/input/{cfg['kaggle_input']}"
+        name: f"/kaggle/input/datasets/{cfg['kaggle_slug']}"
         for name, cfg in TASKS.items()
     }
 
