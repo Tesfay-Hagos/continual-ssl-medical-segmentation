@@ -36,12 +36,14 @@ print(f"REPO_DIR  : {REPO_DIR}")
 print(f"OUT_DIR   : {OUT_DIR}")
 
 # %%
-# Clone repo only on Kaggle (locally we are already inside it)
-if ON_KAGGLE and not os.path.exists(REPO_DIR):
-    result = subprocess.run(
-        ["git", "clone", REPO_URL, REPO_DIR],
-        capture_output=True, text=True
-    )
+# Clone or pull repo on Kaggle so we always have the latest src/ code
+if ON_KAGGLE:
+    if not os.path.exists(REPO_DIR):
+        result = subprocess.run(["git", "clone", REPO_URL, REPO_DIR],
+                                capture_output=True, text=True)
+    else:
+        result = subprocess.run(["git", "-C", REPO_DIR, "pull"],
+                                capture_output=True, text=True)
     print(result.stdout or result.stderr)
 else:
     print(f"Using repo at: {REPO_DIR}")
