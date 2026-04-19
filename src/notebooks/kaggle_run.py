@@ -90,7 +90,7 @@ WANDB_PROJECT = "cssl-medical"
 try:
     if ON_KAGGLE:
         from kaggle_secrets import UserSecretsClient
-        _key = UserSecretsClient().get_secret("wandb_token")
+        _key = UserSecretsClient().get_secret("WANDB_API_KEY")
         wandb.login(key=_key)
     else:
         wandb.login()          # uses WANDB_API_KEY env var locally
