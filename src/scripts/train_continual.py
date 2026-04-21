@@ -21,17 +21,23 @@ from monai.losses import DiceCELoss
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from monai.inferers import sliding_window_inference
+
 from data.datasets import get_loaders
 from evaluation.metrics import (SegmentationEvaluator, print_cl_metrics,
                                  backward_transfer, forgetting_measure,
                                  average_accuracy)
 from models.unet import build_unet, UNetWithEncoder
+from utils.storage import save_checkpoint, restore_checkpoint
 
 try:
     import wandb
     _WANDB = True
 except ImportError:
     _WANDB = False
+
+
+_LATEST_PTH = "latest.pth"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -81,8 +87,12 @@ def _setup_strategy(cfg: dict, model, device):
     return cl_reg, replay_buf
 
 
-def _resume(ckpt_dir: Path, model, optimizer, scheduler, scaler):
-    path = ckpt_dir / "latest.pth"
+def _resume(ckpt_dir: Path, model, optimizer, scheduler, scaler,
+            artifact_name: str, project: str,
+            gdrive_folder: str, gdrive_creds: str):
+    restore_checkpoint(_LATEST_PTH, ckpt_dir, artifact_name,
+                       project, gdrive_folder, gdrive_creds)
+    path = ckpt_dir / _LATEST_PTH
     if not path.exists():
         return 0, 0.0, float("inf")
     state = torch.load(path, map_location="cpu")
@@ -95,13 +105,16 @@ def _resume(ckpt_dir: Path, model, optimizer, scheduler, scaler):
 
 
 def _save(ckpt_dir: Path, epoch: int, model, optimizer, scheduler, scaler,
-          best_val_dsc: float, best_val_loss: float):
+          best_val_dsc: float, best_val_loss: float,
+          artifact_name: str, gdrive_folder: str, gdrive_creds: str):
+    path = ckpt_dir / _LATEST_PTH
     torch.save({"epoch": epoch, "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
                 "scaler":    scaler.state_dict(),
                 "best_val_dsc": best_val_dsc,
-                "best_val_loss": best_val_loss}, ckpt_dir / "latest.pth")
+                "best_val_loss": best_val_loss}, path)
+    save_checkpoint(path, artifact_name, gdrive_folder, gdrive_creds)
 
 
 def train_one_epoch(model, loader, optimizer, scaler, criterion,
@@ -140,12 +153,23 @@ def train_one_epoch(model, loader, optimizer, scaler, criterion,
     return total_loss / max(len(loader), 1)
 
 
+_ROI = (96, 96, 96)   # must match training patch size
+
 @torch.no_grad()
 def evaluate(model, loader, device) -> dict:
+    """
+    Sliding-window inference over full volumes.
+    Calling model() directly on a 512x512x400 CT would OOM and give wrong
+    InstanceNorm statistics. sliding_window_inference tiles the volume into
+    overlapping 96^3 windows matching the training distribution, then blends.
+    """
     model.eval()
     ev = SegmentationEvaluator(num_classes=2)
     for batch in loader:
-        ev.update(model(batch["image"].to(device)), batch["label"].to(device))
+        img  = batch["image"].to(device)
+        pred = sliding_window_inference(
+            img, _ROI, sw_batch_size=2, predictor=model, overlap=0.25)
+        ev.update(pred, batch["label"].to(device))
     return ev.aggregate()
 
 
@@ -179,8 +203,14 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
     scheduler = _make_scheduler(optimizer, n_epochs, warmup_epochs)
     scaler    = torch.amp.GradScaler(device.type, enabled=(device.type == "cuda"))
 
+    artifact_name = f"cl-{cfg.get('strategy','none')}-{task_name}"
+    gdrive_folder = cfg.get("gdrive_folder_id", "")
+    gdrive_creds  = cfg.get("gdrive_credentials", "")
+
     start_epoch, best_val_dsc, best_val_loss = _resume(
-        ckpt_dir, model, optimizer, scheduler, scaler)
+        ckpt_dir, model, optimizer, scheduler, scaler,
+        artifact_name, cfg.get("wandb_project", "cssl-medical"),
+        gdrive_folder, gdrive_creds)
     if start_epoch:
         print(f"  Resumed {task_name} from epoch {start_epoch}, "
               f"best_dsc={best_val_dsc:.4f}")
@@ -213,7 +243,8 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
             best_val_dsc = val_dsc
 
         _save(ckpt_dir, epoch + 1, model, optimizer, scheduler, scaler,
-              best_val_dsc, best_val_loss)
+              best_val_dsc, best_val_loss,
+              artifact_name, gdrive_folder, gdrive_creds)
 
         if val_dsc > best_val_loss:
             best_val_loss = val_dsc

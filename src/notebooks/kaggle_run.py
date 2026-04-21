@@ -97,7 +97,8 @@ WANDB_PROJECT = "cssl-medical"
 try:
     if ON_KAGGLE:
         from kaggle_secrets import UserSecretsClient
-        _key = UserSecretsClient().get_secret("WANDB_API_KEY")
+        _secrets = UserSecretsClient()
+        _key = _secrets.get_secret("WANDB_API_KEY")
         wandb.login(key=_key)
     else:
         wandb.login()          # uses WANDB_API_KEY env var locally
@@ -106,6 +107,22 @@ try:
 except Exception as e:
     USE_WANDB = False
     print(f"WandB login failed ({e}) — running without logging.")
+
+# Google Drive backup — optional. Set GDRIVE_CREDENTIALS + GDRIVE_FOLDER_ID
+# in Kaggle secrets (Add-ons → Secrets). Run src/utils/gdrive_setup.py
+# locally once to generate the credentials JSON.
+GDRIVE_FOLDER_ID  = ""
+GDRIVE_CREDENTIALS = ""
+try:
+    if ON_KAGGLE:
+        GDRIVE_FOLDER_ID   = _secrets.get_secret("GDRIVE_FOLDER_ID")
+        GDRIVE_CREDENTIALS = _secrets.get_secret("GDRIVE_CREDENTIALS")
+        print(f"Google Drive backup enabled (folder: {GDRIVE_FOLDER_ID[:8]}...)")
+    else:
+        GDRIVE_FOLDER_ID   = os.environ.get("GDRIVE_FOLDER_ID", "")
+        GDRIVE_CREDENTIALS = os.environ.get("GDRIVE_CREDENTIALS", "")
+except Exception:
+    print("Google Drive backup not configured — checkpoints saved to WandB only.")
 
 # %% [markdown]
 # ## 1 — Dataset verification
@@ -140,14 +157,16 @@ else:
     with open(cfg_path) as f:
         pretrain_cfg = yaml.safe_load(f)
 
-    pretrain_cfg["task_roots"]     = TASK_ROOTS
-    pretrain_cfg["output_dir"]     = os.path.join(OUT_DIR, "pretrain")
-    pretrain_cfg["epochs"]         = 100
-    pretrain_cfg["batch_size"]     = 2
-    pretrain_cfg["num_workers"]    = 2 if ON_KAGGLE else 0
-    pretrain_cfg["use_wandb"]      = USE_WANDB
-    pretrain_cfg["wandb_project"]  = WANDB_PROJECT
-    pretrain_cfg["wandb_run"]      = "spark-pretrain"
+    pretrain_cfg["task_roots"]        = TASK_ROOTS
+    pretrain_cfg["output_dir"]        = os.path.join(OUT_DIR, "pretrain")
+    pretrain_cfg["epochs"]            = 100
+    pretrain_cfg["batch_size"]        = 2
+    pretrain_cfg["num_workers"]       = 2 if ON_KAGGLE else 0
+    pretrain_cfg["use_wandb"]         = USE_WANDB
+    pretrain_cfg["wandb_project"]     = WANDB_PROJECT
+    pretrain_cfg["wandb_run"]         = "spark-pretrain"
+    pretrain_cfg["gdrive_folder_id"]  = GDRIVE_FOLDER_ID
+    pretrain_cfg["gdrive_credentials"] = GDRIVE_CREDENTIALS
 
     pretrain(pretrain_cfg)
     print(f"\nPretraining complete. Checkpoint: {PRETRAIN_CKPT}")
@@ -199,10 +218,12 @@ with open(cfg_path) as f:
     ewc_base = yaml.safe_load(f)
 
 ewc_base.update({
-    "task_roots":    TASK_ROOTS,
-    "num_workers":   2 if ON_KAGGLE else 0,
-    "use_wandb":     USE_WANDB,
-    "wandb_project": WANDB_PROJECT,
+    "task_roots":         TASK_ROOTS,
+    "num_workers":        2 if ON_KAGGLE else 0,
+    "use_wandb":          USE_WANDB,
+    "wandb_project":      WANDB_PROJECT,
+    "gdrive_folder_id":   GDRIVE_FOLDER_ID,
+    "gdrive_credentials": GDRIVE_CREDENTIALS,
 })
 
 # 4a — EWC, no pretraining
@@ -235,10 +256,12 @@ with open(cfg_path) as f:
     lwf_base = yaml.safe_load(f)
 
 lwf_base.update({
-    "task_roots":    TASK_ROOTS,
-    "num_workers":   2 if ON_KAGGLE else 0,
-    "use_wandb":     USE_WANDB,
-    "wandb_project": WANDB_PROJECT,
+    "task_roots":         TASK_ROOTS,
+    "num_workers":        2 if ON_KAGGLE else 0,
+    "use_wandb":          USE_WANDB,
+    "wandb_project":      WANDB_PROJECT,
+    "gdrive_folder_id":   GDRIVE_FOLDER_ID,
+    "gdrive_credentials": GDRIVE_CREDENTIALS,
 })
 
 # 5a — LwF, no pretraining
@@ -273,10 +296,12 @@ with open(cfg_path) as f:
     replay_base = yaml.safe_load(f)
 
 replay_base.update({
-    "task_roots":    TASK_ROOTS,
-    "num_workers":   2 if ON_KAGGLE else 0,
-    "use_wandb":     USE_WANDB,
-    "wandb_project": WANDB_PROJECT,
+    "task_roots":         TASK_ROOTS,
+    "num_workers":        2 if ON_KAGGLE else 0,
+    "use_wandb":          USE_WANDB,
+    "wandb_project":      WANDB_PROJECT,
+    "gdrive_folder_id":   GDRIVE_FOLDER_ID,
+    "gdrive_credentials": GDRIVE_CREDENTIALS,
 })
 
 # 6a — Replay, no pretraining
@@ -325,6 +350,7 @@ from data.datasets import get_loaders, TASK_ORDER, get_transforms, get_file_list
 from monai.data import CacheDataset
 from models.unet import build_unet, UNetWithEncoder
 from monai.losses import DiceCELoss
+from monai.inferers import sliding_window_inference
 from evaluation.metrics import SegmentationEvaluator, print_cl_metrics
 
 multitask_out = os.path.join(OUT_DIR, "multitask")
@@ -387,7 +413,10 @@ for i, task_name in enumerate(["liver", "pancreas", "heart"]):
     mt_model.eval()
     with torch.no_grad():
         for batch in all_val[task_name]:
-            ev.update(mt_model(batch["image"].to(DEVICE)), batch["label"].to(DEVICE))
+            pred = sliding_window_inference(
+                batch["image"].to(DEVICE), (96, 96, 96),
+                sw_batch_size=2, predictor=mt_model, overlap=0.25)
+            ev.update(pred, batch["label"].to(DEVICE))
     m = ev.aggregate()
     R_mt[0, i] = m["dice"]
     print(f"  Multi-task {task_name:<10}: DSC={m['dice']:.4f}")

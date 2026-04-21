@@ -23,6 +23,7 @@ from torch.utils.data import DataLoader
 from data.datasets import get_unlabelled_files
 from models.unet import build_unet
 from pretraining.spark import SparKPretrainer
+from utils.storage import save_checkpoint, restore_checkpoint
 
 try:
     import wandb
@@ -73,41 +74,12 @@ def _make_scheduler(optimizer, n_epochs: int, warmup_epochs: int):
         optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
 
 
-# ── WandB artifact helpers ────────────────────────────────────────────────────
-
-def _upload_checkpoint(path: Path, use_wandb: bool):
-    if not (_WANDB and use_wandb and wandb.run is not None):
-        return
-    try:
-        art = wandb.Artifact(_ARTIFACT_NAME, type="checkpoint")
-        art.add_file(str(path), name="latest.pth")
-        wandb.log_artifact(art)
-    except Exception as e:
-        print(f"  ⚠️  WandB artifact upload failed (non-fatal): {e}")
-
-
-def _download_checkpoint(out_dir: Path, project: str, use_wandb: bool) -> bool:
-    if not (_WANDB and use_wandb):
-        return False
-    local = out_dir / "latest.pth"
-    if local.exists():
-        return False
-    try:
-        api  = wandb.Api()
-        art  = api.artifact(f"{project}/{_ARTIFACT_NAME}:latest")
-        art.get_path("latest.pth").download(root=str(out_dir))
-        print(f"  ✅ Checkpoint restored from WandB artifact")
-        return True
-    except Exception as e:
-        print(f"  ℹ️  No WandB checkpoint found (starting fresh): {e}")
-        return False
-
-
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
 
 def _resume(out_dir: Path, model, optimizer, scheduler, scaler,
-            project: str, use_wandb: bool):
-    _download_checkpoint(out_dir, project, use_wandb)
+            project: str, use_wandb: bool, gdrive_folder: str, gdrive_creds: str):
+    restore_checkpoint("latest.pth", out_dir, _ARTIFACT_NAME,
+                       project, gdrive_folder, gdrive_creds)
     path = out_dir / "latest.pth"
     if not path.exists():
         return 0, float("inf"), float("inf")
@@ -123,7 +95,8 @@ def _resume(out_dir: Path, model, optimizer, scheduler, scaler,
 
 
 def _save_state(out_dir: Path, epoch: int, model, optimizer, scheduler, scaler,
-                best_loss: float, best_loss_ema: float, use_wandb: bool):
+                best_loss: float, best_loss_ema: float,
+                use_wandb: bool, gdrive_folder: str, gdrive_creds: str):
     path = out_dir / "latest.pth"
     torch.save({"epoch": epoch, "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
@@ -131,7 +104,7 @@ def _save_state(out_dir: Path, epoch: int, model, optimizer, scheduler, scaler,
                 "scaler":    scaler.state_dict(),
                 "best_loss": best_loss,
                 "best_loss_ema": best_loss_ema}, path)
-    _upload_checkpoint(path, use_wandb)
+    save_checkpoint(path, _ARTIFACT_NAME, gdrive_folder, gdrive_creds)
 
 
 # ── Training ──────────────────────────────────────────────────────────────────
@@ -173,10 +146,12 @@ def _early_stop_step(avg: float, best_ema: float, trigger: int, patience: int):
 # ── Main entry ────────────────────────────────────────────────────────────────
 
 def pretrain(cfg: dict):
-    device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    out_dir   = Path(cfg["output_dir"])
-    use_wandb = cfg.get("use_wandb", True)
-    project   = cfg.get("wandb_project", "cssl-medical")
+    device        = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    out_dir       = Path(cfg["output_dir"])
+    use_wandb     = cfg.get("use_wandb", True)
+    project       = cfg.get("wandb_project", "cssl-medical")
+    gdrive_folder = cfg.get("gdrive_folder_id", "")
+    gdrive_creds  = cfg.get("gdrive_credentials", "")
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Device: {device}")
 
@@ -203,7 +178,8 @@ def pretrain(cfg: dict):
     scaler    = torch.amp.GradScaler(device.type, enabled=(device.type == "cuda"))
 
     start_epoch, best_loss, best_ema = _resume(
-        out_dir, model, optimizer, scheduler, scaler, project, use_wandb)
+        out_dir, model, optimizer, scheduler, scaler,
+        project, use_wandb, gdrive_folder, gdrive_creds)
 
     save_every = cfg.get("save_every", 20)
     patience   = cfg.get("patience", 15)
@@ -225,7 +201,7 @@ def pretrain(cfg: dict):
         best_loss = _update_checkpoints(out_dir, epoch, avg, best_loss,
                                          save_every, model, n_epochs)
         _save_state(out_dir, epoch + 1, model, optimizer, scheduler, scaler,
-                    best_loss, best_ema, use_wandb)
+                    best_loss, best_ema, use_wandb, gdrive_folder, gdrive_creds)
 
         best_ema, trigger, stop = _early_stop_step(avg, best_ema, trigger, patience)
         if stop:
