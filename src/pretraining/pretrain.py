@@ -28,6 +28,8 @@ try:
 except ImportError:
     _WANDB = False
 
+_ARTIFACT_NAME = "pretrain-checkpoint"
+
 
 def get_ssl_transforms(patch_size: int = 96) -> Compose:
     return Compose([
@@ -56,7 +58,46 @@ def _build_model(cfg: dict, device: torch.device):
                            mask_ratio=cfg["mask_ratio"]).to(device)
 
 
-def _resume(out_dir: Path, model, optimizer, scheduler):
+# ── WandB artifact helpers ────────────────────────────────────────────────────
+
+def _upload_checkpoint(path: Path, use_wandb: bool):
+    """Upload latest.pth to WandB as a versioned artifact (non-blocking on error)."""
+    if not (_WANDB and use_wandb and wandb.run is not None):
+        return
+    try:
+        art = wandb.Artifact(_ARTIFACT_NAME, type="checkpoint")
+        art.add_file(str(path), name="latest.pth")
+        wandb.log_artifact(art)
+    except Exception as e:
+        print(f"  ⚠️  WandB artifact upload failed (non-fatal): {e}")
+
+
+def _download_checkpoint(out_dir: Path, project: str, use_wandb: bool) -> bool:
+    """
+    Download latest.pth from the most recent WandB artifact if local file missing.
+    Returns True if a checkpoint was restored.
+    """
+    if not (_WANDB and use_wandb):
+        return False
+    local = out_dir / "latest.pth"
+    if local.exists():
+        return False
+    try:
+        api  = wandb.Api()
+        art  = api.artifact(f"{project}/{_ARTIFACT_NAME}:latest")
+        path = art.get_path("latest.pth").download(root=str(out_dir))
+        print(f"  ✅ Checkpoint restored from WandB artifact → {path}")
+        return True
+    except Exception as e:
+        print(f"  ℹ️  No WandB checkpoint found (starting fresh): {e}")
+        return False
+
+
+# ── Checkpoint helpers ────────────────────────────────────────────────────────
+
+def _resume(out_dir: Path, model, optimizer, scheduler,
+            project: str, use_wandb: bool):
+    _download_checkpoint(out_dir, project, use_wandb)
     path = out_dir / "latest.pth"
     if not path.exists():
         return 0, float("inf"), float("inf")
@@ -64,16 +105,20 @@ def _resume(out_dir: Path, model, optimizer, scheduler):
     model.load_state_dict(state["model"])
     optimizer.load_state_dict(state["optimizer"])
     scheduler.load_state_dict(state["scheduler"])
-    return state["epoch"], state["best_loss"], state.get("best_loss_ema", float("inf"))
+    epoch = state["epoch"]
+    print(f"Resumed from epoch {epoch}, best_loss={state['best_loss']:.5f}")
+    return epoch, state["best_loss"], state.get("best_loss_ema", float("inf"))
 
 
 def _save_state(out_dir: Path, epoch: int, model, optimizer, scheduler,
-                best_loss: float, best_loss_ema: float):
+                best_loss: float, best_loss_ema: float, use_wandb: bool):
+    path = out_dir / "latest.pth"
     torch.save({"epoch": epoch, "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
                 "best_loss": best_loss,
-                "best_loss_ema": best_loss_ema}, out_dir / "latest.pth")
+                "best_loss_ema": best_loss_ema}, path)
+    _upload_checkpoint(path, use_wandb)
 
 
 def _run_epoch(model, loader, optimizer, device) -> float:
@@ -112,13 +157,15 @@ def _early_stop_step(avg: float, best_ema: float,
 # ── Main entry ────────────────────────────────────────────────────────────────
 
 def pretrain(cfg: dict):
-    device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    out_dir = Path(cfg["output_dir"])
+    device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    out_dir    = Path(cfg["output_dir"])
+    use_wandb  = cfg.get("use_wandb", True)
+    project    = cfg.get("wandb_project", "cssl-medical")
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Device: {device}")
 
-    if _WANDB and cfg.get("use_wandb", True):
-        wandb.init(project=cfg.get("wandb_project", "cssl-medical"),
+    if _WANDB and use_wandb:
+        wandb.init(project=project,
                    name=cfg.get("wandb_run", "spark-pretrain"),
                    config={k: v for k, v in cfg.items() if k != "task_roots"},
                    reinit=True)
@@ -136,9 +183,8 @@ def pretrain(cfg: dict):
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=cfg["epochs"], eta_min=1e-6)
 
-    start_epoch, best_loss, best_ema = _resume(out_dir, model, optimizer, scheduler)
-    if start_epoch:
-        print(f"Resumed from epoch {start_epoch}, best_loss={best_loss:.5f}")
+    start_epoch, best_loss, best_ema = _resume(
+        out_dir, model, optimizer, scheduler, project, use_wandb)
 
     save_every = cfg.get("save_every", 10)
     patience   = cfg.get("patience", 15)
@@ -153,14 +199,15 @@ def pretrain(cfg: dict):
         print(f"Epoch {epoch+1:>4}/{n_epochs} | loss={avg:.5f} | "
               f"best={best_loss:.5f} | {time.time()-t0:.0f}s")
 
-        if _WANDB and cfg.get("use_wandb", True):
+        if _WANDB and use_wandb:
             wandb.log({"pretrain/loss": avg,
                        "pretrain/lr":   scheduler.get_last_lr()[0],
                        "epoch":         epoch + 1})
 
         best_loss = _update_checkpoints(out_dir, epoch, avg, best_loss,
                                          save_every, model, n_epochs)
-        _save_state(out_dir, epoch + 1, model, optimizer, scheduler, best_loss, best_ema)
+        _save_state(out_dir, epoch + 1, model, optimizer, scheduler,
+                    best_loss, best_ema, use_wandb)
 
         best_ema, trigger, stop = _early_stop_step(avg, best_ema, trigger, patience)
         if stop:
@@ -168,7 +215,7 @@ def pretrain(cfg: dict):
             break
 
     print(f"Pretraining done. Best loss: {best_loss:.5f}\nEncoder saved to {out_dir}")
-    if _WANDB and cfg.get("use_wandb", True):
+    if _WANDB and use_wandb:
         wandb.finish()
 
 
