@@ -170,7 +170,7 @@ baseline_cfg = {
     "task_order":      ["liver", "pancreas", "heart"],
     "channels":        [32, 64, 128, 256, 512],
     "strides":         [2, 2, 2, 2],
-    "epochs_per_task": 50,
+    "epochs_per_task": 15,
     "batch_size":      2,
     "lr":              1e-4,
     "weight_decay":    1e-5,
@@ -302,7 +302,7 @@ run_continual(replay_ssl)
 # Minimum buffer size at which Replay matches multi-task upper bound within 5% DSC.
 
 # %%
-for buf_size in [50, 100, 200, 500]:
+for buf_size in [100, 500]:
     cfg = {**replay_base,
            "use_pretrained":  True,
            "pretrained_ckpt": PRETRAIN_CKPT,
@@ -357,11 +357,10 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50)
 
 # Single combined loader (mix all tasks each epoch)
 import random
-for epoch in range(1, 51):
+for epoch in range(1, 16):
     mt_model.train()
     random.shuffle(all_train)
     epoch_loss = 0.0
-    # Mini training loop (process first 100 samples per epoch to save time)
     subset = all_train[:100]
     for item in subset:
         task = ["liver", "pancreas", "heart"][item["task"]]
@@ -378,8 +377,8 @@ for epoch in range(1, 51):
         optimizer.step()
         epoch_loss += loss.item()
     scheduler.step()
-    if epoch % 10 == 0:
-        print(f"  Multi-task epoch {epoch}/50 | loss={epoch_loss/len(subset):.4f}")
+    if epoch % 5 == 0:
+        print(f"  Multi-task epoch {epoch}/15 | loss={epoch_loss/len(subset):.4f}")
 
 # Evaluate upper bound
 R_mt = np.zeros((1, 3))

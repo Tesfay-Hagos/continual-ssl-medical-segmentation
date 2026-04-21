@@ -13,7 +13,7 @@ ewc_lambda:        1000.0
 fisher_batches:    100
 
 # Training per task
-epochs_per_task:   50
+epochs_per_task:   15
 batch_size:        2
 lr:                1.0e-4
 weight_decay:      1.0e-5

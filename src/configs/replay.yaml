@@ -13,7 +13,7 @@ buffer_capacity:   200     # RQ4: ablate over [50, 100, 200, 500]
 replay_batch_size: 2
 
 # Training per task
-epochs_per_task:   50
+epochs_per_task:   15
 batch_size:        2
 lr:                1.0e-4
 weight_decay:      1.0e-5
