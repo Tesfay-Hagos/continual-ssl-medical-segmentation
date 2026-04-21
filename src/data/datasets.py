@@ -31,7 +31,8 @@ from monai.transforms import (
     Compose, LoadImaged, EnsureChannelFirstd, Spacingd,
     Orientationd, ScaleIntensityRanged, CropForegroundd,
     RandCropByPosNegLabeld, RandFlipd, RandRotate90d, ToTensord,
-    NormalizeIntensityd,
+    NormalizeIntensityd, RandGaussianNoised, RandScaleIntensityd,
+    RandShiftIntensityd,
 )
 
 
@@ -47,7 +48,7 @@ TASKS = {
         "spacing":       (1.5, 1.5, 2.0),
         "intensity_range": (-175, 250),
         "label_value":   1,
-        "n_train_approx": 131,   # MSD Task03: 131 training volumes
+        "n_train_approx": 131,
     },
     "pancreas": {
         "task_id":       1,
@@ -58,7 +59,7 @@ TASKS = {
         "spacing":       (1.5, 1.5, 2.0),
         "intensity_range": (-125, 275),
         "label_value":   1,
-        "n_train_approx": 281,   # MSD Task07: 281 training volumes
+        "n_train_approx": 281,
     },
     "heart": {
         "task_id":       2,
@@ -69,34 +70,23 @@ TASKS = {
         "spacing":       (1.25, 1.25, 1.37),
         "intensity_range": None,
         "label_value":   1,
-        "n_train_approx": 20,    # MSD Task02: 20 training volumes
+        "n_train_approx": 20,
     },
 }
 
 TASK_ORDER = ["liver", "pancreas", "heart"]
 
 
-# ── Path resolution: handles both Kaggle layout variants ──────────────────────
+# ── Path resolution ───────────────────────────────────────────────────────────
 
 def resolve_task_dir(task_root: str, task_name: str) -> Path:
-    """
-    Given the mounted dataset root (e.g. /kaggle/input/medical-segmentation-decathlon-heart),
-    find the actual directory containing imagesTr/.
-
-    Handles two layouts:
-      (A) task_root/Task02_Heart/imagesTr/   ← task subfolder present
-      (B) task_root/imagesTr/               ← files directly at root
-    Raises FileNotFoundError if neither exists.
-    """
     root = Path(task_root)
     task_folder = TASKS[task_name]["task_folder"]
 
-    # Layout A: task subfolder
     candidate_a = root / task_folder / "imagesTr"
     if candidate_a.exists():
         return root / task_folder
 
-    # Layout B: root directly contains imagesTr
     candidate_b = root / "imagesTr"
     if candidate_b.exists():
         return root
@@ -110,19 +100,10 @@ def resolve_task_dir(task_root: str, task_name: str) -> Path:
 
 
 def build_task_roots(base: str) -> Dict[str, str]:
-    """
-    Build per-task roots from a single base path (for local use where all
-    task folders live under one directory, e.g. /data/decathlon/Task03_Liver).
-    """
     return dict.fromkeys(TASKS, base)
 
 
 def kaggle_task_roots() -> Dict[str, str]:
-    """Return Kaggle input paths for each task.
-
-    Kaggle now mounts datasets at /kaggle/input/datasets/<username>/<dataset>/
-    using the full slug (e.g. vivekprajapati2048/medical-segmentation-decathlon-heart).
-    """
     return {
         name: f"/kaggle/input/datasets/{cfg['kaggle_slug']}"
         for name, cfg in TASKS.items()
@@ -151,14 +132,12 @@ def glob_nii(directory: Path) -> List[Path]:
     flat = _real_nii(sorted(directory.glob(f"*{_EXT_NII}")))
     if flat:
         return flat
-    # Kaggle nested: each file is wrapped in a same-named folder
     return _real_nii(sorted(directory.glob(f"*/*{_EXT_NII}")))
 
 
 # ── Dataset verification ───────────────────────────────────────────────────────
 
 def verify_datasets(task_roots: Dict[str, str]) -> bool:
-    """Print a verification table and return True only if all tasks are found."""
     print("\n── Dataset verification ──────────────────────────────────────")
     all_ok = True
     for task_name in TASK_ORDER:
@@ -183,7 +162,6 @@ def verify_datasets(task_roots: Dict[str, str]) -> bool:
 
 def get_file_list(task_roots: Dict[str, str],
                   task_name: str) -> Tuple[List[dict], List[dict]]:
-    """Return (train_files, val_files) for one task."""
     task_dir = resolve_task_dir(task_roots[task_name], task_name)
     img_dir  = task_dir / "imagesTr"
     lbl_dir  = task_dir / "labelsTr"
@@ -203,7 +181,6 @@ def get_file_list(task_roots: Dict[str, str],
 
 
 def get_unlabelled_files(task_roots: Dict[str, str]) -> List[dict]:
-    """Collect all images from all tasks for SSL pretraining (no labels needed)."""
     all_files = []
     for task_name in TASK_ORDER:
         try:
@@ -236,6 +213,10 @@ def _ct_transforms(task_name: str, train: bool) -> Compose:
                                    pos=1, neg=1, num_samples=4),
             RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
             RandRotate90d(keys=keys, prob=0.5, max_k=3),
+            # Intensity augmentation — improves generalisation across scanners
+            RandGaussianNoised(keys=["image"], prob=0.2, std=0.01),
+            RandScaleIntensityd(keys=["image"], factors=0.1, prob=0.5),
+            RandShiftIntensityd(keys=["image"], offsets=0.1, prob=0.5),
         ]
     base.append(ToTensord(keys=keys))
     return Compose(base)
@@ -258,6 +239,10 @@ def _mri_transforms(task_name: str, train: bool) -> Compose:
                                    spatial_size=(96, 96, 96),
                                    pos=1, neg=1, num_samples=4),
             RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
+            # MRI has high inter-scanner variability — stronger intensity aug
+            RandGaussianNoised(keys=["image"], prob=0.2, std=0.05),
+            RandScaleIntensityd(keys=["image"], factors=0.1, prob=0.5),
+            RandShiftIntensityd(keys=["image"], offsets=0.1, prob=0.5),
         ]
     base.append(ToTensord(keys=keys))
     return Compose(base)

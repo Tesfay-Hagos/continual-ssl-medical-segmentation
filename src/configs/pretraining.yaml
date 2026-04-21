@@ -12,6 +12,7 @@ mask_ratio:       0.75
 
 # Training
 epochs:          100
+warmup_epochs:   5
 batch_size:      2
 lr:              1.0e-4
 weight_decay:    0.05

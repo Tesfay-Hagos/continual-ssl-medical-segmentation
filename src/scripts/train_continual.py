@@ -41,6 +41,16 @@ def _log(cfg: dict, log_dict: dict):
         wandb.log(log_dict)
 
 
+def _make_scheduler(optimizer, n_epochs: int, warmup_epochs: int):
+    """Linear warmup then cosine annealing."""
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(1, n_epochs - warmup_epochs), eta_min=1e-6)
+    return torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+
+
 def load_model(cfg: dict, device: torch.device) -> UNetWithEncoder:
     unet  = build_unet(in_channels=1, out_channels=2,
                        channels=tuple(cfg["channels"]),
@@ -71,7 +81,7 @@ def _setup_strategy(cfg: dict, model, device):
     return cl_reg, replay_buf
 
 
-def _resume(ckpt_dir: Path, model, optimizer, scheduler):
+def _resume(ckpt_dir: Path, model, optimizer, scheduler, scaler):
     path = ckpt_dir / "latest.pth"
     if not path.exists():
         return 0, 0.0, float("inf")
@@ -79,19 +89,22 @@ def _resume(ckpt_dir: Path, model, optimizer, scheduler):
     model.load_state_dict(state["model"])
     optimizer.load_state_dict(state["optimizer"])
     scheduler.load_state_dict(state["scheduler"])
+    if "scaler" in state:
+        scaler.load_state_dict(state["scaler"])
     return state["epoch"], state.get("best_val_dsc", 0.0), state.get("best_val_loss", float("inf"))
 
 
-def _save(ckpt_dir: Path, epoch: int, model, optimizer, scheduler,
+def _save(ckpt_dir: Path, epoch: int, model, optimizer, scheduler, scaler,
           best_val_dsc: float, best_val_loss: float):
     torch.save({"epoch": epoch, "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
+                "scaler":    scaler.state_dict(),
                 "best_val_dsc": best_val_dsc,
                 "best_val_loss": best_val_loss}, ckpt_dir / "latest.pth")
 
 
-def train_one_epoch(model, loader, optimizer, criterion,
+def train_one_epoch(model, loader, optimizer, scaler, criterion,
                     cl_reg, replay_buf, cfg: dict, device) -> float:
     model.train()
     total_loss = 0.0
@@ -101,23 +114,27 @@ def train_one_epoch(model, loader, optimizer, criterion,
         imgs   = batch["image"].to(device)
         labels = batch["label"].long().squeeze(1).to(device)
         optimizer.zero_grad()
-        loss   = criterion(model(imgs), labels)
 
-        if strategy == "ewc" and cl_reg is not None:
-            loss = loss + cl_reg.penalty(model)
-        elif strategy == "lwf" and cl_reg is not None:
-            loss = loss + cl_reg.distillation_loss(model, imgs)
+        with torch.amp.autocast(device_type=device.type):
+            loss = criterion(model(imgs), labels)
 
-        if replay_buf is not None and len(replay_buf) > 0:
-            r_imgs, r_lbl = replay_buf.sample(cfg.get("replay_batch_size", 2))
-            if r_imgs is not None:
-                r_loss = criterion(model(r_imgs.to(device)),
-                                   r_lbl.long().squeeze(1).to(device))
-                loss = loss + r_loss
+            if strategy == "ewc" and cl_reg is not None:
+                loss = loss + cl_reg.penalty(model)
+            elif strategy == "lwf" and cl_reg is not None:
+                loss = loss + cl_reg.distillation_loss(model, imgs)
 
-        loss.backward()
+            if replay_buf is not None and len(replay_buf) > 0:
+                r_imgs, r_lbl = replay_buf.sample(cfg.get("replay_batch_size", 2))
+                if r_imgs is not None:
+                    r_loss = criterion(model(r_imgs.to(device)),
+                                       r_lbl.long().squeeze(1).to(device))
+                    loss = loss + r_loss
+
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         total_loss += loss.item()
 
     return total_loss / max(len(loader), 1)
@@ -134,7 +151,6 @@ def evaluate(model, loader, device) -> dict:
 
 def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
                 cl_reg, replay_buf, device, out_dir: Path, val_loaders: dict):
-    """Per-task training loop with early stopping, checkpoints, and WandB logging."""
     ckpt_dir = out_dir / task_name
     ckpt_dir.mkdir(exist_ok=True)
 
@@ -146,23 +162,36 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
     )
     val_loaders[task_name] = val_loader
 
-    optimizer = torch.optim.AdamW(model.parameters(),
-                                  lr=cfg["lr"], weight_decay=cfg["weight_decay"])
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=cfg["epochs_per_task"], eta_min=1e-6)
+    n_epochs      = cfg["epochs_per_task"]
+    warmup_epochs = cfg.get("warmup_epochs", 2)
+    base_lr       = cfg["lr"]
 
-    start_epoch, best_val_dsc, best_val_loss = _resume(ckpt_dir, model, optimizer, scheduler)
+    # Differential LR: pretrained encoder gets 10× lower LR to protect
+    # learned representations; decoder adapts at full LR.
+    if cfg.get("use_pretrained"):
+        param_groups = model.parameter_groups(
+            base_lr, encoder_lr_scale=cfg.get("encoder_lr_scale", 0.1))
+    else:
+        param_groups = model.parameters()
+
+    optimizer = torch.optim.AdamW(param_groups,
+                                  lr=base_lr, weight_decay=cfg["weight_decay"])
+    scheduler = _make_scheduler(optimizer, n_epochs, warmup_epochs)
+    scaler    = torch.amp.GradScaler(device.type, enabled=(device.type == "cuda"))
+
+    start_epoch, best_val_dsc, best_val_loss = _resume(
+        ckpt_dir, model, optimizer, scheduler, scaler)
     if start_epoch:
-        print(f"  Resumed {task_name} from epoch {start_epoch}, best_dsc={best_val_dsc:.4f}")
+        print(f"  Resumed {task_name} from epoch {start_epoch}, "
+              f"best_dsc={best_val_dsc:.4f}")
 
     save_every = cfg.get("save_every_n_epochs", 10)
     patience   = cfg.get("patience", 10)
     trigger    = 0
-    n_epochs   = cfg["epochs_per_task"]
 
     for epoch in range(start_epoch, n_epochs):
-        train_loss  = train_one_epoch(model, train_loader, optimizer, criterion,
-                                      cl_reg, replay_buf, cfg, device)
+        train_loss  = train_one_epoch(model, train_loader, optimizer, scaler,
+                                      criterion, cl_reg, replay_buf, cfg, device)
         scheduler.step()
         val_metrics = evaluate(model, val_loader, device)
         val_dsc     = val_metrics["dice"]
@@ -183,16 +212,17 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
             torch.save(model.state_dict(), ckpt_dir / "best.pth")
             best_val_dsc = val_dsc
 
-        _save(ckpt_dir, epoch + 1, model, optimizer, scheduler, best_val_dsc, best_val_loss)
+        _save(ckpt_dir, epoch + 1, model, optimizer, scheduler, scaler,
+              best_val_dsc, best_val_loss)
 
-        # Early stopping: stop if val DSC does not improve
         if val_dsc > best_val_loss:
             best_val_loss = val_dsc
             trigger = 0
         else:
             trigger += 1
             if trigger == patience:
-                print(f"  Val DSC did not improve for {patience} epochs. Early stopping.")
+                print(f"  Val DSC did not improve for {patience} epochs. "
+                      f"Early stopping.")
                 break
 
     return train_loader, val_loader
@@ -224,10 +254,12 @@ def _eval_all_tasks(model, tasks: list, t: int, val_loaders: dict,
 def run(cfg: dict):
     device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     strategy = cfg.get("strategy", "none")
-    run_name = cfg.get("wandb_run", f"{strategy}_{'ssl' if cfg.get('use_pretrained') else 'no_ssl'}")
+    run_name = cfg.get("wandb_run",
+                       f"{strategy}_{'ssl' if cfg.get('use_pretrained') else 'no_ssl'}")
 
     print(f"\nStrategy: {strategy.upper()}  |  Device: {device}")
-    print(f"Pretrained: {cfg.get('use_pretrained', False)}  |  Tasks: {cfg['task_order']}\n")
+    print(f"Pretrained: {cfg.get('use_pretrained', False)}  |  "
+          f"Tasks: {cfg['task_order']}\n")
 
     out_dir = Path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -256,7 +288,8 @@ def run(cfg: dict):
     print_cl_metrics(R, tasks)
 
     with open(out_dir / "cl_results.json", "w") as f:
-        json.dump({"strategy": strategy, "use_pretrained": cfg.get("use_pretrained", False),
+        json.dump({"strategy": strategy,
+                   "use_pretrained": cfg.get("use_pretrained", False),
                    "task_order": tasks, "R_matrix": R.tolist()}, f, indent=2)
     print(f"\nResults saved to {out_dir / 'cl_results.json'}")
 
@@ -271,7 +304,8 @@ def run(cfg: dict):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
-    ap.add_argument("--strategy", default=None, choices=["ewc", "lwf", "replay", "none"])
+    ap.add_argument("--strategy", default=None,
+                    choices=["ewc", "lwf", "replay", "none"])
     ap.add_argument("--no_pretrained", action="store_true")
     args = ap.parse_args()
 
