@@ -108,21 +108,22 @@ except Exception as e:
     USE_WANDB = False
     print(f"WandB login failed ({e}) — running without logging.")
 
-# Google Drive backup — optional. Set GDRIVE_CREDENTIALS + GDRIVE_FOLDER_ID
-# in Kaggle secrets (Add-ons → Secrets). Run src/utils/gdrive_setup.py
-# locally once to generate the credentials JSON.
-GDRIVE_FOLDER_ID  = ""
+# Set to True only after running src/utils/gdrive_setup.py and adding
+# GDRIVE_CREDENTIALS + GDRIVE_FOLDER_ID to Kaggle secrets.
+USE_GDRIVE = False
+
+GDRIVE_FOLDER_ID   = ""
 GDRIVE_CREDENTIALS = ""
-try:
-    if ON_KAGGLE:
+if USE_GDRIVE:
+    try:
         GDRIVE_FOLDER_ID   = _secrets.get_secret("GDRIVE_FOLDER_ID")
         GDRIVE_CREDENTIALS = _secrets.get_secret("GDRIVE_CREDENTIALS")
         print(f"Google Drive backup enabled (folder: {GDRIVE_FOLDER_ID[:8]}...)")
-    else:
-        GDRIVE_FOLDER_ID   = os.environ.get("GDRIVE_FOLDER_ID", "")
-        GDRIVE_CREDENTIALS = os.environ.get("GDRIVE_CREDENTIALS", "")
-except Exception:
-    print("Google Drive backup not configured — checkpoints saved to WandB only.")
+    except Exception as e:
+        print(f"Google Drive setup failed ({e}) — using WandB only.")
+        USE_GDRIVE = False
+else:
+    print("Google Drive disabled — checkpoints saved to WandB artifacts only.")
 
 # %% [markdown]
 # ## 1 — Dataset verification
