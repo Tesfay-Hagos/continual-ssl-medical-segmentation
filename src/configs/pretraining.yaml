@@ -21,5 +21,5 @@ lr:              1.0e-4
 weight_decay:    0.05
 patch_size:      96
 num_workers:     2
-cache_rate:      0.05
+cache_rate:      1.0
 save_every:      20
