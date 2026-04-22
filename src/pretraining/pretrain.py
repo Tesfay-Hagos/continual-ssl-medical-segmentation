@@ -83,7 +83,7 @@ def _resume(out_dir: Path, model, optimizer, scheduler, scaler,
                        project, gdrive_folder, gdrive_creds)
     path = out_dir / "latest.pth"
     if not path.exists():
-        return 0, float("inf"), float("inf")
+        return 0, float("inf"), float("inf"), None
     state = torch.load(path, map_location="cpu")
     model.load_state_dict(state["model"])
     optimizer.load_state_dict(state["optimizer"])
@@ -92,19 +92,21 @@ def _resume(out_dir: Path, model, optimizer, scheduler, scaler,
         scaler.load_state_dict(state["scaler"])
     epoch = state["epoch"]
     print(f"Resumed from epoch {epoch}, best_loss={state['best_loss']:.5f}")
-    return epoch, state["best_loss"], state.get("best_loss_ema", float("inf"))
+    return epoch, state["best_loss"], state.get("best_loss_ema", float("inf")), state.get("wandb_run_id")
 
 
 def _save_state(out_dir: Path, epoch: int, model, optimizer, scheduler, scaler,
                 best_loss: float, best_loss_ema: float,
                 use_wandb: bool, gdrive_folder: str, gdrive_creds: str):
+    run_id = wandb.run.id if (_WANDB and wandb.run is not None) else None
     path = out_dir / "latest.pth"
     torch.save({"epoch": epoch, "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
                 "scaler":    scaler.state_dict(),
                 "best_loss": best_loss,
-                "best_loss_ema": best_loss_ema}, path)
+                "best_loss_ema": best_loss_ema,
+                "wandb_run_id": run_id}, path)
     save_checkpoint(path, _ARTIFACT_NAME, gdrive_folder, gdrive_creds)
 
 
@@ -156,12 +158,6 @@ def pretrain(cfg: dict):
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Device: {device}")
 
-    if _WANDB and use_wandb:
-        wandb.init(project=project,
-                   name=cfg.get("wandb_run", "spark-pretrain"),
-                   config={k: v for k, v in cfg.items() if k != "task_roots"},
-                   reinit=True)
-
     files  = get_unlabelled_files(cfg["task_roots"])
     ds     = CacheDataset(files, transform=get_ssl_transforms(cfg["patch_size"]),
                           cache_rate=cfg.get("cache_rate", 0.05))
@@ -178,9 +174,22 @@ def pretrain(cfg: dict):
     scheduler = _make_scheduler(optimizer, n_epochs, warmup_epochs)
     scaler    = torch.amp.GradScaler(device.type, enabled=(device.type == "cuda"))
 
-    start_epoch, best_loss, best_ema = _resume(
+    start_epoch, best_loss, best_ema, saved_run_id = _resume(
         out_dir, model, optimizer, scheduler, scaler,
         project, use_wandb, gdrive_folder, gdrive_creds)
+
+    if _WANDB and use_wandb:
+        init_kwargs = dict(
+            project=project,
+            config={k: v for k, v in cfg.items() if k != "task_roots"},
+        )
+        if saved_run_id:
+            # Continue the exact same run so loss graph is one continuous line
+            init_kwargs["id"]     = saved_run_id
+            init_kwargs["resume"] = "must"
+        else:
+            init_kwargs["name"] = cfg.get("wandb_run", "spark-pretrain")
+        wandb.init(**init_kwargs)
 
     save_every = cfg.get("save_every", 20)
     patience   = cfg.get("patience", 15)

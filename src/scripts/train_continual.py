@@ -94,26 +94,29 @@ def _resume(ckpt_dir: Path, model, optimizer, scheduler, scaler,
                        project, gdrive_folder, gdrive_creds)
     path = ckpt_dir / _LATEST_PTH
     if not path.exists():
-        return 0, 0.0, float("inf")
+        return 0, 0.0, float("inf"), None
     state = torch.load(path, map_location="cpu")
     model.load_state_dict(state["model"])
     optimizer.load_state_dict(state["optimizer"])
     scheduler.load_state_dict(state["scheduler"])
     if "scaler" in state:
         scaler.load_state_dict(state["scaler"])
-    return state["epoch"], state.get("best_val_dsc", 0.0), state.get("best_val_loss", float("inf"))
+    return (state["epoch"], state.get("best_val_dsc", 0.0),
+            state.get("best_val_loss", float("inf")), state.get("wandb_run_id"))
 
 
 def _save(ckpt_dir: Path, epoch: int, model, optimizer, scheduler, scaler,
           best_val_dsc: float, best_val_loss: float,
           artifact_name: str, gdrive_folder: str, gdrive_creds: str):
+    run_id = wandb.run.id if (_WANDB and wandb.run is not None) else None
     path = ckpt_dir / _LATEST_PTH
     torch.save({"epoch": epoch, "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
                 "scaler":    scaler.state_dict(),
                 "best_val_dsc": best_val_dsc,
-                "best_val_loss": best_val_loss}, path)
+                "best_val_loss": best_val_loss,
+                "wandb_run_id": run_id}, path)
     save_checkpoint(path, artifact_name, gdrive_folder, gdrive_creds)
 
 
@@ -207,7 +210,7 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
     gdrive_folder = cfg.get("gdrive_folder_id", "")
     gdrive_creds  = cfg.get("gdrive_credentials", "")
 
-    start_epoch, best_val_dsc, best_val_loss = _resume(
+    start_epoch, best_val_dsc, best_val_loss, _ = _resume(
         ckpt_dir, model, optimizer, scheduler, scaler,
         artifact_name, cfg.get("wandb_project", "cssl-medical"),
         gdrive_folder, gdrive_creds)
@@ -296,9 +299,21 @@ def run(cfg: dict):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if _WANDB and cfg.get("use_wandb", True):
-        wandb.init(project=cfg.get("wandb_project", "cssl-medical"), name=run_name,
-                   config={k: v for k, v in cfg.items() if k != "task_roots"},
-                   reinit=True)
+        run_id_file = out_dir / "wandb_run_id.json"
+        saved_run_id = None
+        if run_id_file.exists():
+            saved_run_id = json.load(open(run_id_file)).get("run_id")
+        init_kwargs = dict(
+            project=cfg.get("wandb_project", "cssl-medical"),
+            config={k: v for k, v in cfg.items() if k != "task_roots"},
+        )
+        if saved_run_id:
+            init_kwargs["id"]     = saved_run_id
+            init_kwargs["resume"] = "must"
+        else:
+            init_kwargs["name"] = run_name
+        wandb.init(**init_kwargs)
+        run_id_file.write_text(json.dumps({"run_id": wandb.run.id}))
 
     tasks     = cfg["task_order"]
     R         = np.zeros((len(tasks), len(tasks)))
