@@ -179,13 +179,14 @@ def pretrain(cfg: dict):
         project, use_wandb, gdrive_folder, gdrive_creds)
 
     if _WANDB and use_wandb:
+        # Config takes priority, then checkpoint, then start fresh
+        run_id = cfg.get("wandb_run_id") or saved_run_id
         init_kwargs = dict(
             project=project,
             config={k: v for k, v in cfg.items() if k != "task_roots"},
         )
-        if saved_run_id:
-            # Continue the exact same run so loss graph is one continuous line
-            init_kwargs["id"]     = saved_run_id
+        if run_id:
+            init_kwargs["id"]     = run_id
             init_kwargs["resume"] = "must"
         else:
             init_kwargs["name"] = cfg.get("wandb_run", "spark-pretrain")

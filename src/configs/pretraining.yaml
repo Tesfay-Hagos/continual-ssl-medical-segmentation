@@ -1,5 +1,8 @@
 # SparK pretraining configuration
 # task_roots defined in kaggle_run.py
+# Set wandb_run_id to resume an existing WandB run (get the ID from the run URL)
+# e.g. https://wandb.ai/entity/cssl-medical/runs/ic5uk3tm  →  ic5uk3tm
+wandb_run_id: "ic5uk3tm"
 output_dir:      "/kaggle/working/checkpoints/pretrain"
 
 # Model
