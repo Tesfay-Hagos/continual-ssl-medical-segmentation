@@ -6,6 +6,7 @@ Run:
 """
 
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -209,6 +210,13 @@ def pretrain(cfg: dict):
             break
 
     print(f"Pretraining done. Best loss: {best_loss:.5f}\nEncoder saved to {out_dir}")
+
+    # Write completion marker — notebook uses this (not best.pth) to decide skip
+    done_path = out_dir / "pretrain_done.json"
+    done_path.write_text(json.dumps({"epochs_completed": epoch + 1,
+                                      "best_loss": best_loss}))
+    save_checkpoint(done_path, _ARTIFACT_NAME, gdrive_folder, gdrive_creds)
+
     if _WANDB and use_wandb:
         wandb.finish()
 

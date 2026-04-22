@@ -35,7 +35,11 @@ except ImportError:
 # ── WandB ─────────────────────────────────────────────────────────────────────
 
 def wandb_upload(local_path: Path, artifact_name: str):
-    """Upload a file as a WandB artifact (non-fatal on error)."""
+    """Add a file to an existing or new WandB artifact (non-fatal on error).
+
+    All files added under the same artifact_name form one versioned artifact,
+    so latest.pth and pretrain_done.json both land in pretrain-checkpoint:latest.
+    """
     if not (_WANDB and wandb.run is not None):
         return
     try:

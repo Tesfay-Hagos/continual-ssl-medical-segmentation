@@ -149,10 +149,24 @@ import yaml
 from pretraining.pretrain import pretrain
 
 PRETRAIN_CKPT = os.path.join(OUT_DIR, "pretrain", "best.pth")
+PRETRAIN_DONE = os.path.join(OUT_DIR, "pretrain", "pretrain_done.json")
 
-if os.path.exists(PRETRAIN_CKPT):
-    print(f"Pretrained checkpoint already exists:\n  {PRETRAIN_CKPT}")
-    print("Delete it to re-run pretraining.")
+# Try to restore the completion marker from WandB so we can tell whether
+# pretraining truly finished (best.pth is created after epoch 1, so it
+# cannot be used as a "done" signal).
+from utils.storage import restore_checkpoint
+from pathlib import Path
+restore_checkpoint("pretrain_done.json",
+                   Path(os.path.join(OUT_DIR, "pretrain")),
+                   "pretrain-checkpoint", WANDB_PROJECT,
+                   GDRIVE_FOLDER_ID, GDRIVE_CREDENTIALS)
+
+if os.path.exists(PRETRAIN_DONE):
+    import json as _json
+    _info = _json.load(open(PRETRAIN_DONE))
+    print(f"Pretraining already complete "
+          f"({_info['epochs_completed']} epochs, best_loss={_info['best_loss']:.5f})")
+    print("Delete pretrain_done.json to re-run pretraining.")
 else:
     cfg_path = os.path.join(SRC_DIR, "configs", "pretraining.yaml")
     with open(cfg_path) as f:
