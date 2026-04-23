@@ -136,8 +136,22 @@ def train_one_epoch(model, loader, optimizer, scaler, criterion,
 
     for batch_idx, batch in enumerate(loader):
         try:
-            imgs   = batch["image"].to(device)
-            labels = _safe_label(batch["label"]).to(device)
+            # FIXED: Convert MetaTensor to regular tensor before GPU transfer
+            imgs   = batch["image"]
+            labels = batch["label"]
+            
+            # Convert MetaTensor to regular tensor to avoid CUDA issues
+            if hasattr(imgs, 'as_array'):
+                imgs = torch.tensor(imgs.as_array(), device=device)
+            else:
+                imgs = imgs.to(device)
+                
+            if hasattr(labels, 'as_array'):
+                labels = torch.tensor(labels.as_array(), device=device)
+            else:
+                labels = labels.to(device)
+            
+            labels = _safe_label(labels)
             
             # FIXED: Validate batch shapes on first batch
             if batch_idx == 0:
@@ -183,12 +197,13 @@ def train_one_epoch(model, loader, optimizer, scaler, criterion,
             error_str = str(e).lower()
             if "out of memory" in error_str:
                 print(f"  ⚠️  GPU OOM, clearing cache and skipping batch")
-                torch.cuda.empty_cache()  # FIXED: Clear GPU cache
-                torch.cuda.reset_peak_memory_stats()  # FIXED: Reset memory stats
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
                 optimizer.zero_grad()
             elif "device-side assert" in error_str or "cuda" in error_str:
                 print(f"  ⚠️  CUDA error, clearing cache and skipping batch")
-                torch.cuda.empty_cache()  # FIXED: Clear GPU cache
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
                 optimizer.zero_grad()
             else:
                 print(f"  ⚠️  Batch error: {e}, skipping")
