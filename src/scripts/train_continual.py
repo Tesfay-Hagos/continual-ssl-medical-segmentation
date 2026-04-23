@@ -128,7 +128,7 @@ def train_one_epoch(model, loader, optimizer, scaler, criterion,
 
     for batch in loader:
         imgs   = batch["image"].to(device)
-        labels = batch["label"].long().squeeze(1).to(device)
+        labels = batch["label"].long().to(device)
         optimizer.zero_grad()
 
         with torch.amp.autocast(device_type=device.type):
@@ -143,7 +143,7 @@ def train_one_epoch(model, loader, optimizer, scaler, criterion,
                 r_imgs, r_lbl = replay_buf.sample(cfg.get("replay_batch_size", 2))
                 if r_imgs is not None:
                     r_loss = criterion(model(r_imgs.to(device)),
-                                       r_lbl.long().squeeze(1).to(device))
+                                       r_lbl.long().to(device))
                     loss = loss + r_loss
 
         scaler.scale(loss).backward()
