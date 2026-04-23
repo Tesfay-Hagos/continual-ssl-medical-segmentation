@@ -120,40 +120,64 @@ def _save(ckpt_dir: Path, epoch: int, model, optimizer, scheduler, scaler,
     save_checkpoint(path, artifact_name, gdrive_folder, gdrive_creds)
 
 
+def _safe_label(t: torch.Tensor) -> torch.Tensor:
+    """Ensure label has shape [B,1,H,W,D] as required by DiceCELoss(to_onehot_y=True)."""
+    if t.dim() == 4:          # [B,H,W,D] → add channel dim
+        t = t.unsqueeze(1)
+    return t.long()
+
+
 def train_one_epoch(model, loader, optimizer, scaler, criterion,
                     cl_reg, replay_buf, cfg: dict, device) -> float:
     model.train()
-    total_loss = 0.0
-    strategy   = cfg.get("strategy", "none")
+    total_loss  = 0.0
+    good_batches = 0
+    strategy    = cfg.get("strategy", "none")
 
     for batch in loader:
-        imgs   = batch["image"].to(device)
-        labels = batch["label"].long().to(device)
-        optimizer.zero_grad()
+        try:
+            imgs   = batch["image"].to(device)
+            labels = _safe_label(batch["label"]).to(device)
+            optimizer.zero_grad()
 
-        with torch.amp.autocast(device_type=device.type):
-            loss = criterion(model(imgs), labels)
+            with torch.amp.autocast(device_type=device.type):
+                loss = criterion(model(imgs), labels)
 
-            if strategy == "ewc" and cl_reg is not None:
-                loss = loss + cl_reg.penalty(model)
-            elif strategy == "lwf" and cl_reg is not None:
-                loss = loss + cl_reg.distillation_loss(model, imgs)
+                if strategy == "ewc" and cl_reg is not None:
+                    loss = loss + cl_reg.penalty(model)
+                elif strategy == "lwf" and cl_reg is not None:
+                    loss = loss + cl_reg.distillation_loss(model, imgs)
 
-            if replay_buf is not None and len(replay_buf) > 0:
-                r_imgs, r_lbl = replay_buf.sample(cfg.get("replay_batch_size", 2))
-                if r_imgs is not None:
-                    r_loss = criterion(model(r_imgs.to(device)),
-                                       r_lbl.long().to(device))
-                    loss = loss + r_loss
+                if replay_buf is not None and len(replay_buf) > 0:
+                    r_imgs, r_lbl = replay_buf.sample(cfg.get("replay_batch_size", 2))
+                    if r_imgs is not None:
+                        r_loss = criterion(model(r_imgs.to(device)),
+                                           _safe_label(r_lbl).to(device))
+                        loss = loss + r_loss
 
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
-        total_loss += loss.item()
+            if not torch.isfinite(loss):
+                print(f"  ⚠️  Non-finite loss ({loss.item():.4f}), skipping batch")
+                optimizer.zero_grad()
+                continue
 
-    return total_loss / max(len(loader), 1)
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            total_loss  += loss.item()
+            good_batches += 1
+
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                print(f"  ⚠️  GPU OOM, skipping batch")
+                torch.cuda.empty_cache()
+                optimizer.zero_grad()
+            else:
+                print(f"  ⚠️  Batch error: {e}, skipping")
+            continue
+
+    return total_loss / max(good_batches, 1)
 
 
 _ROI = (96, 96, 96)   # must match training patch size
@@ -169,10 +193,17 @@ def evaluate(model, loader, device) -> dict:
     model.eval()
     ev = SegmentationEvaluator(num_classes=2)
     for batch in loader:
-        img  = batch["image"].to(device)
-        pred = sliding_window_inference(
-            img, _ROI, sw_batch_size=2, predictor=model, overlap=0.25)
-        ev.update(pred, batch["label"].to(device))
+        try:
+            img  = batch["image"].to(device)
+            pred = sliding_window_inference(
+                img, _ROI, sw_batch_size=2, predictor=model, overlap=0.25)
+            ev.update(pred, batch["label"].to(device))
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                print(f"  ⚠️  OOM during eval, skipping volume")
+                torch.cuda.empty_cache()
+            else:
+                print(f"  ⚠️  Eval error: {e}, skipping volume")
     return ev.aggregate()
 
 
@@ -324,12 +355,16 @@ def run(cfg: dict):
 
     for t, task_name in enumerate(tasks):
         print(f"\n{'='*60}\nTask {t+1}/{len(tasks)}: {task_name.upper()}\n{'='*60}")
-        train_loader, val_loader = _train_task(
-            model, task_name, t, cfg, criterion, cl_reg, replay_buf,
-            device, out_dir, val_loaders)
-        _post_task(strategy, cl_reg, replay_buf, model,
-                   val_loader, train_loader, t, cfg, device)
-        _eval_all_tasks(model, tasks, t, val_loaders, R, cfg, device)
+        try:
+            train_loader, val_loader = _train_task(
+                model, task_name, t, cfg, criterion, cl_reg, replay_buf,
+                device, out_dir, val_loaders)
+            _post_task(strategy, cl_reg, replay_buf, model,
+                       val_loader, train_loader, t, cfg, device)
+            _eval_all_tasks(model, tasks, t, val_loaders, R, cfg, device)
+        except Exception as e:
+            print(f"  ❌ Task {task_name} failed: {e} — continuing to next task")
+            import traceback; traceback.print_exc()
 
     print_cl_metrics(R, tasks)
 
