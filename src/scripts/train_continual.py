@@ -329,13 +329,31 @@ def run(cfg: dict):
     out_dir = Path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── Progress file: tracks completed tasks + R matrix across session restarts ──
+    progress_artifact = f"cl-{strategy}-progress"
+    progress_file     = out_dir / "cl_progress.json"
+    project           = cfg.get("wandb_project", "cssl-medical")
+
+    # Try to restore progress from WandB artifact
+    restore_checkpoint("cl_progress.json", out_dir, progress_artifact, project)
+    completed_tasks = []
+    saved_run_id    = None
+    tasks           = cfg["task_order"]
+    R               = np.zeros((len(tasks), len(tasks)))
+
+    if progress_file.exists():
+        prog = json.load(open(progress_file))
+        completed_tasks = prog.get("completed_tasks", [])
+        saved_run_id    = prog.get("wandb_run_id")
+        r_partial       = prog.get("R_matrix")
+        if r_partial:
+            R = np.array(r_partial)
+        if completed_tasks:
+            print(f"Resuming — tasks already done: {completed_tasks}")
+
     if _WANDB and cfg.get("use_wandb", True):
-        run_id_file = out_dir / "wandb_run_id.json"
-        saved_run_id = None
-        if run_id_file.exists():
-            saved_run_id = json.load(open(run_id_file)).get("run_id")
         init_kwargs = dict(
-            project=cfg.get("wandb_project", "cssl-medical"),
+            project=project,
             config={k: v for k, v in cfg.items() if k != "task_roots"},
         )
         if saved_run_id:
@@ -344,10 +362,16 @@ def run(cfg: dict):
         else:
             init_kwargs["name"] = run_name
         wandb.init(**init_kwargs)
-        run_id_file.write_text(json.dumps({"run_id": wandb.run.id}))
 
-    tasks     = cfg["task_order"]
-    R         = np.zeros((len(tasks), len(tasks)))
+    def _save_progress():
+        progress_file.write_text(json.dumps({
+            "completed_tasks": completed_tasks,
+            "R_matrix":        R.tolist(),
+            "wandb_run_id":    wandb.run.id if (_WANDB and wandb.run) else None,
+        }, indent=2))
+        save_checkpoint(progress_file, progress_artifact,
+                        cfg.get("gdrive_folder_id", ""), cfg.get("gdrive_credentials", ""))
+
     model     = load_model(cfg, device)
     criterion = DiceCELoss(to_onehot_y=True, softmax=True)
     cl_reg, replay_buf = _setup_strategy(cfg, model, device)
@@ -355,6 +379,19 @@ def run(cfg: dict):
 
     for t, task_name in enumerate(tasks):
         print(f"\n{'='*60}\nTask {t+1}/{len(tasks)}: {task_name.upper()}\n{'='*60}")
+
+        if task_name in completed_tasks:
+            print(f"  ✅ Already completed — skipping training and post-task")
+            # Still need val_loader for future cross-task evaluation
+            _, val_loader = get_loaders(
+                cfg["task_roots"], task_name,
+                batch_size=cfg["batch_size"],
+                num_workers=cfg["num_workers"],
+                cache_rate=cfg.get("cache_rate", 0.1),
+            )
+            val_loaders[task_name] = val_loader
+            continue
+
         try:
             train_loader, val_loader = _train_task(
                 model, task_name, t, cfg, criterion, cl_reg, replay_buf,
@@ -362,6 +399,9 @@ def run(cfg: dict):
             _post_task(strategy, cl_reg, replay_buf, model,
                        val_loader, train_loader, t, cfg, device)
             _eval_all_tasks(model, tasks, t, val_loaders, R, cfg, device)
+            completed_tasks.append(task_name)
+            _save_progress()
+            print(f"  💾 Progress saved ({len(completed_tasks)}/{len(tasks)} tasks done)")
         except Exception as e:
             print(f"  ❌ Task {task_name} failed: {e} — continuing to next task")
             import traceback; traceback.print_exc()
