@@ -245,6 +245,7 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
         ckpt_dir, model, optimizer, scheduler, scaler,
         artifact_name, cfg.get("wandb_project", "cssl-medical"),
         gdrive_folder, gdrive_creds)
+    best_val_hd95 = float("inf")
     if start_epoch:
         print(f"  Resumed {task_name} from epoch {start_epoch}, "
               f"best_dsc={best_val_dsc:.4f}")
@@ -274,7 +275,8 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
 
         if val_dsc >= best_val_dsc:
             torch.save(model.state_dict(), ckpt_dir / "best.pth")
-            best_val_dsc = val_dsc
+            best_val_dsc  = val_dsc
+            best_val_hd95 = val_hd95
 
         _save(ckpt_dir, epoch + 1, model, optimizer, scheduler, scaler,
               best_val_dsc, best_val_loss,
@@ -290,7 +292,10 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
                       f"Early stopping.")
                 break
 
-    return train_loader, val_loader
+    # Log per-task best results to WandB summary
+    _log(cfg, {f"{task_name}/best_dsc":  best_val_dsc,
+               f"{task_name}/best_hd95": best_val_hd95})
+    return train_loader, val_loader, best_val_dsc, best_val_hd95
 
 
 def _post_task(strategy: str, cl_reg, replay_buf, model,
@@ -305,10 +310,11 @@ def _post_task(strategy: str, cl_reg, replay_buf, model,
 
 
 def _eval_all_tasks(model, tasks: list, t: int, val_loaders: dict,
-                    R: np.ndarray, cfg: dict, device):
+                    R_dsc: np.ndarray, R_hd95: np.ndarray, cfg: dict, device):
     for i, past_task in enumerate(tasks[:t + 1]):
         m = evaluate(model, val_loaders[past_task], device)
-        R[t, i] = m["dice"]
+        R_dsc[t, i]  = m["dice"]
+        R_hd95[t, i] = m["hd95"]
         print(f"  Eval {past_task:<10}: DSC={m['dice']:.4f}  HD95={m['hd95']:.1f}")
         _log(cfg, {f"eval/{past_task}_dsc_after_task{t+1}":  m["dice"],
                    f"eval/{past_task}_hd95_after_task{t+1}": m["hd95"]})
@@ -339,15 +345,20 @@ def run(cfg: dict):
     completed_tasks = []
     saved_run_id    = None
     tasks           = cfg["task_order"]
-    R               = np.zeros((len(tasks), len(tasks)))
+    T               = len(tasks)
+    R_dsc           = np.zeros((T, T))
+    R_hd95          = np.full((T, T), float("nan"))
+    per_task_best   = {}
 
     if progress_file.exists():
         prog = json.load(open(progress_file))
         completed_tasks = prog.get("completed_tasks", [])
         saved_run_id    = prog.get("wandb_run_id")
-        r_partial       = prog.get("R_matrix")
-        if r_partial:
-            R = np.array(r_partial)
+        if prog.get("R_dsc"):
+            R_dsc  = np.array(prog["R_dsc"])
+        if prog.get("R_hd95"):
+            R_hd95 = np.array(prog["R_hd95"])
+        per_task_best = prog.get("per_task_best", {})
         if completed_tasks:
             print(f"Resuming — tasks already done: {completed_tasks}")
 
@@ -366,7 +377,9 @@ def run(cfg: dict):
     def _save_progress():
         progress_file.write_text(json.dumps({
             "completed_tasks": completed_tasks,
-            "R_matrix":        R.tolist(),
+            "R_dsc":           R_dsc.tolist(),
+            "R_hd95":          R_hd95.tolist(),
+            "per_task_best":   per_task_best,
             "wandb_run_id":    wandb.run.id if (_WANDB and wandb.run) else None,
         }, indent=2))
         save_checkpoint(progress_file, progress_artifact,
@@ -393,12 +406,13 @@ def run(cfg: dict):
             continue
 
         try:
-            train_loader, val_loader = _train_task(
+            train_loader, val_loader, best_dsc, best_hd95 = _train_task(
                 model, task_name, t, cfg, criterion, cl_reg, replay_buf,
                 device, out_dir, val_loaders)
+            per_task_best[task_name] = {"best_dsc": best_dsc, "best_hd95": best_hd95}
             _post_task(strategy, cl_reg, replay_buf, model,
                        val_loader, train_loader, t, cfg, device)
-            _eval_all_tasks(model, tasks, t, val_loaders, R, cfg, device)
+            _eval_all_tasks(model, tasks, t, val_loaders, R_dsc, R_hd95, cfg, device)
             completed_tasks.append(task_name)
             _save_progress()
             print(f"  💾 Progress saved ({len(completed_tasks)}/{len(tasks)} tasks done)")
@@ -406,19 +420,55 @@ def run(cfg: dict):
             print(f"  ❌ Task {task_name} failed: {e} — continuing to next task")
             import traceback; traceback.print_exc()
 
-    print_cl_metrics(R, tasks)
+    print_cl_metrics(R_dsc, tasks)
 
-    with open(out_dir / "cl_results.json", "w") as f:
-        json.dump({"strategy": strategy,
-                   "use_pretrained": cfg.get("use_pretrained", False),
-                   "task_order": tasks, "R_matrix": R.tolist()}, f, indent=2)
-    print(f"\nResults saved to {out_dir / 'cl_results.json'}")
+    # ── Comprehensive results JSON ────────────────────────────────────────────
+    AA_dsc  = average_accuracy(R_dsc)
+    BWT_dsc = backward_transfer(R_dsc)  if T > 1 else float("nan")
+    FM_dsc  = forgetting_measure(R_dsc) if T > 1 else float("nan")
+
+    # HD95: lower is better so BWT/FM signs are inverted
+    R_hd95_clean = np.nan_to_num(R_hd95, nan=0.0)
+    AA_hd95  = float(np.mean([R_hd95_clean[i, i] for i in range(T)]))
+    BWT_hd95 = float(np.mean([R_hd95_clean[T-1, i] - R_hd95_clean[i, i]
+                               for i in range(T-1)])) if T > 1 else float("nan")
+
+    results = {
+        "strategy":       strategy,
+        "use_pretrained": cfg.get("use_pretrained", False),
+        "tasks":          tasks,
+        # Full evaluation matrices — rows=after task t, cols=task i
+        "R_dsc":          R_dsc.tolist(),
+        "R_hd95":         R_hd95.tolist(),
+        # Per-task best achieved during training
+        "per_task_best":  per_task_best,
+        # CL summary metrics (DSC)
+        "metrics_dsc":    {"AA": AA_dsc, "BWT": BWT_dsc, "FM": FM_dsc},
+        # CL summary metrics (HD95)
+        "metrics_hd95":   {"AA": AA_hd95, "BWT": BWT_hd95},
+    }
+
+    results_path = out_dir / "cl_results.json"
+    results_path.write_text(json.dumps(results, indent=2))
+    print(f"\nResults saved to {results_path}")
+
+    # Upload final results JSON as its own artifact for easy retrieval
+    results_artifact = f"cl-{strategy}-results"
+    save_checkpoint(results_path, results_artifact,
+                    cfg.get("gdrive_folder_id", ""), cfg.get("gdrive_credentials", ""))
 
     if _WANDB and cfg.get("use_wandb", True):
-        T = len(tasks)
-        wandb.log({"summary/AA":  average_accuracy(R),
-                   "summary/BWT": backward_transfer(R) if T > 1 else float("nan"),
-                   "summary/FM":  forgetting_measure(R) if T > 1 else float("nan")})
+        wandb.log({
+            "summary/AA_dsc":   AA_dsc,
+            "summary/BWT_dsc":  BWT_dsc,
+            "summary/FM_dsc":   FM_dsc,
+            "summary/AA_hd95":  AA_hd95,
+            "summary/BWT_hd95": BWT_hd95,
+            **{f"summary/{k}_best_dsc":  v["best_dsc"]
+               for k, v in per_task_best.items()},
+            **{f"summary/{k}_best_hd95": v["best_hd95"]
+               for k, v in per_task_best.items()},
+        })
         wandb.finish()
 
 
