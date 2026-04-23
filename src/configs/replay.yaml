@@ -21,3 +21,6 @@ lr:                1.0e-4
 weight_decay:      1.0e-5
 num_workers:       2
 cache_rate:        0.1
+
+# GPU memory management (FIXED)
+pin_memory:        false  # Disable to prevent MetaTensor corruption

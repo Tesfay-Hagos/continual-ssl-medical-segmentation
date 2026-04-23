@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
+import torch
 from monai.data import DataLoader, CacheDataset
 from monai.transforms import (
     Compose, LoadImaged, EnsureChannelFirstd, Spacingd,
@@ -45,7 +46,7 @@ TASKS = {
         "kaggle_slug":   "vivekprajapati2048/medical-segmentation-decathlon-3dliver",
         "kaggle_input":  "medical-segmentation-decathlon-3dliver",
         "modality":      "CT",
-        "spacing":       (1.5, 1.5, 2.0),
+        "spacing":       (1.5, 1.5, 1.5),  # FIXED: Changed from (1.5, 1.5, 2.0) to isotropic
         "intensity_range": (-175, 250),
         "label_value":   1,
         "n_train_approx": 131,
@@ -56,7 +57,7 @@ TASKS = {
         "kaggle_slug":   "lnguynquangbnh/task07-pancreas",
         "kaggle_input":  "task07-pancreas",
         "modality":      "CT",
-        "spacing":       (1.5, 1.5, 2.0),
+        "spacing":       (1.5, 1.5, 1.5),  # FIXED: Changed from (1.5, 1.5, 2.0) to isotropic
         "intensity_range": (-125, 275),
         "label_value":   1,
         "n_train_approx": 281,
@@ -67,7 +68,7 @@ TASKS = {
         "kaggle_slug":   "vivekprajapati2048/medical-segmentation-decathlon-heart",
         "kaggle_input":  "medical-segmentation-decathlon-heart",
         "modality":      "MRI",
-        "spacing":       (1.25, 1.25, 1.37),
+        "spacing":       (1.5, 1.5, 1.5),  # FIXED: Changed from (1.25, 1.25, 1.37) to isotropic
         "intensity_range": None,
         "label_value":   1,
         "n_train_approx": 20,
@@ -260,7 +261,15 @@ def get_loaders(task_roots: Dict[str, str],
                 task_name:  str,
                 batch_size: int = 2,
                 num_workers: int = 4,
-                cache_rate: float = 0.1) -> Tuple[DataLoader, DataLoader]:
+                cache_rate: float = 0.1,
+                pin_memory: bool = False) -> Tuple[DataLoader, DataLoader]:
+    """
+    Build train and validation dataloaders.
+    
+    Args:
+        pin_memory: If False (default), disables pin_memory to prevent MetaTensor corruption.
+                   Set to True only if you have sufficient GPU memory and stable CUDA setup.
+    """
     train_files, val_files = get_file_list(task_roots, task_name)
     train_ds = CacheDataset(train_files,
                             transform=get_transforms(task_name, train=True),
@@ -270,8 +279,46 @@ def get_loaders(task_roots: Dict[str, str],
                             cache_rate=1.0)
     train_loader = DataLoader(train_ds, batch_size=batch_size,
                               shuffle=True,  num_workers=num_workers,
-                              pin_memory=True)
+                              pin_memory=pin_memory)
     val_loader   = DataLoader(val_ds,   batch_size=1,
                               shuffle=False, num_workers=num_workers,
-                              pin_memory=True)
+                              pin_memory=pin_memory)
     return train_loader, val_loader
+
+
+def validate_batch(batch: dict, task_name: str) -> bool:
+    """
+    Validate batch tensor shapes before training.
+    
+    Raises:
+        ValueError: If tensor shapes are invalid
+    """
+    img = batch["image"]
+    lbl = batch["label"]
+    
+    # Expected shape: [B, C, D, H, W]
+    if img.dim() != 5:
+        raise ValueError(
+            f"[{task_name}] Image tensor has {img.dim()} dimensions, expected 5. "
+            f"Shape: {img.shape}"
+        )
+    
+    if lbl.dim() != 4:
+        raise ValueError(
+            f"[{task_name}] Label tensor has {lbl.dim()} dimensions, expected 4. "
+            f"Shape: {lbl.shape}"
+        )
+    
+    if img.shape[2:] != lbl.shape[1:]:
+        raise ValueError(
+            f"[{task_name}] Image spatial dims {img.shape[2:]} don't match "
+            f"label spatial dims {lbl.shape[1:]}."
+        )
+    
+    if torch.isnan(img).any():
+        raise ValueError(f"[{task_name}] NaN values detected in image tensor")
+    
+    if torch.isnan(lbl).any():
+        raise ValueError(f"[{task_name}] NaN values detected in label tensor")
+    
+    return True

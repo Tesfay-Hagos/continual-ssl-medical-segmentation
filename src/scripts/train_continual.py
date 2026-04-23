@@ -134,10 +134,21 @@ def train_one_epoch(model, loader, optimizer, scaler, criterion,
     good_batches = 0
     strategy    = cfg.get("strategy", "none")
 
-    for batch in loader:
+    for batch_idx, batch in enumerate(loader):
         try:
             imgs   = batch["image"].to(device)
             labels = _safe_label(batch["label"]).to(device)
+            
+            # FIXED: Validate batch shapes on first batch
+            if batch_idx == 0:
+                if imgs.shape[0] == 0:
+                    raise ValueError("Empty batch received")
+                if torch.isnan(imgs).any():
+                    raise ValueError("NaN values in image tensor")
+                if torch.isnan(labels).any():
+                    raise ValueError("NaN values in label tensor")
+                print(f"    ✓ Batch validation passed: img={imgs.shape}, lbl={labels.shape}")
+            
             optimizer.zero_grad()
 
             with torch.amp.autocast(device_type=device.type):
@@ -169,9 +180,15 @@ def train_one_epoch(model, loader, optimizer, scaler, criterion,
             good_batches += 1
 
         except RuntimeError as e:
-            if "out of memory" in str(e).lower():
-                print(f"  ⚠️  GPU OOM, skipping batch")
-                torch.cuda.empty_cache()
+            error_str = str(e).lower()
+            if "out of memory" in error_str:
+                print(f"  ⚠️  GPU OOM, clearing cache and skipping batch")
+                torch.cuda.empty_cache()  # FIXED: Clear GPU cache
+                torch.cuda.reset_peak_memory_stats()  # FIXED: Reset memory stats
+                optimizer.zero_grad()
+            elif "device-side assert" in error_str or "cuda" in error_str:
+                print(f"  ⚠️  CUDA error, clearing cache and skipping batch")
+                torch.cuda.empty_cache()  # FIXED: Clear GPU cache
                 optimizer.zero_grad()
             else:
                 print(f"  ⚠️  Batch error: {e}, skipping")
@@ -217,7 +234,7 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
         batch_size=cfg["batch_size"],
         num_workers=cfg["num_workers"],
         cache_rate=cfg.get("cache_rate", 0.1),
-    )
+        pin_memory=cfg.get("pin_memory", False))  # FIXED: Pass pin_memory parameter
     val_loaders[task_name] = val_loader
 
     n_epochs      = cfg["epochs_per_task"]
@@ -401,7 +418,7 @@ def run(cfg: dict):
                 batch_size=cfg["batch_size"],
                 num_workers=cfg["num_workers"],
                 cache_rate=cfg.get("cache_rate", 0.1),
-            )
+                pin_memory=cfg.get("pin_memory", False))  # FIXED: Pass pin_memory
             val_loaders[task_name] = val_loader
             continue
 
