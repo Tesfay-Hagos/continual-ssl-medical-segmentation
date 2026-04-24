@@ -413,7 +413,7 @@ for epoch in range(1, 16):
         lbl = out["label"].unsqueeze(0).long().to(DEVICE)
         optimizer.zero_grad()
         pred = mt_model(img)
-        loss = criterion(pred, lbl.squeeze(1))
+        loss = criterion(pred, lbl)
         loss.backward()
         optimizer.step()
         epoch_loss += loss.item()

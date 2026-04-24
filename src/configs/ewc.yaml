@@ -1,5 +1,6 @@
 # EWC continual learning configuration
 # task_roots defined in kaggle_run.py
+strategy:          "ewc"
 output_dir:        "/kaggle/working/checkpoints/ewc"
 pretrained_ckpt:   "/kaggle/working/checkpoints/pretrain/best.pth"
 use_pretrained:    true

@@ -313,7 +313,9 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
 def _post_task(strategy: str, cl_reg, replay_buf, model,
                val_loader, train_loader, t: int, cfg: dict, device):
     if strategy == "ewc" and cl_reg is not None:
-        cl_reg.register_task(model, val_loader, device,
+        # Use train_loader (96^3 crops) rather than val_loader (full volumes)
+        # to avoid OOM and match the training data distribution.
+        cl_reg.register_task(model, train_loader, device,
                               num_batches=cfg.get("fisher_batches", 100))
     elif strategy == "lwf" and cl_reg is not None:
         cl_reg.register_task(model)
@@ -348,7 +350,9 @@ def run(cfg: dict):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Progress file: tracks completed tasks + R matrix across session restarts ──
-    progress_artifact = f"cl-{strategy}-progress"
+    # Use run_name (which includes ssl/no_ssl suffix) so ewc_no_ssl and ewc_ssl
+    # don't share the same WandB artifact and mistakenly skip each other's work.
+    progress_artifact = f"cl-{run_name}-progress"
     progress_file     = out_dir / "cl_progress.json"
     project           = cfg.get("wandb_project", "cssl-medical")
 
@@ -465,7 +469,7 @@ def run(cfg: dict):
     print(f"\nResults saved to {results_path}")
 
     # Upload final results JSON as its own artifact for easy retrieval
-    results_artifact = f"cl-{strategy}-results"
+    results_artifact = f"cl-{run_name}-results"
     save_checkpoint(results_path, results_artifact,
                     cfg.get("gdrive_folder_id", ""), cfg.get("gdrive_credentials", ""))
 
