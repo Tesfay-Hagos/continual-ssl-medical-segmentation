@@ -51,7 +51,11 @@ class SegmentationEvaluator:
         pred_list  = [self.post_pred(p)  for p in decollate_batch(pred)]
         label_list = [self.post_label(l) for l in decollate_batch(label)]
         self.dice_metric(y_pred=pred_list, y=label_list)
-        self.hd95_metric(y_pred=pred_list, y=label_list)
+        # HD95 uses CuPy on GPU tensors which fails on some environments.
+        # Moving to CPU forces numpy-based computation instead.
+        pred_cpu  = [p.cpu() for p in pred_list]
+        label_cpu = [l.cpu() for l in label_list]
+        self.hd95_metric(y_pred=pred_cpu, y=label_cpu)
 
     def aggregate(self) -> Dict[str, float]:
         dice = self.dice_metric.aggregate().item()
