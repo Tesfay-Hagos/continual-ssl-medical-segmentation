@@ -209,7 +209,7 @@ def evaluate(model, loader, device) -> dict:
             img  = batch["image"].to(device)
             pred = sliding_window_inference(
                 img, _ROI, sw_batch_size=2, predictor=model, overlap=0.25)
-            ev.update(pred, batch["label"].to(device))
+            ev.update(pred.cpu(), batch["label"].cpu())
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
                 print(f"  ⚠️  OOM during eval, skipping volume")
