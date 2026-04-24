@@ -33,7 +33,7 @@ from monai.transforms import (
     Orientationd, ScaleIntensityRanged, CropForegroundd,
     RandCropByPosNegLabeld, RandFlipd, RandRotate90d, ToTensord,
     NormalizeIntensityd, RandGaussianNoised, RandScaleIntensityd,
-    RandShiftIntensityd,
+    RandShiftIntensityd, Lambdad, SpatialPadd,
 )
 
 
@@ -194,6 +194,11 @@ def get_unlabelled_files(task_roots: Dict[str, str]) -> List[dict]:
 
 # ── Transforms ────────────────────────────────────────────────────────────────
 
+def _binarize_label(x):
+    """Map all non-zero labels to 1. Handles liver/pancreas (0/1/2) → binary (0/1)."""
+    return (x > 0).float()
+
+
 def _ct_transforms(task_name: str, train: bool) -> Compose:
     cfg    = TASKS[task_name]
     a_min, a_max = cfg["intensity_range"]
@@ -201,6 +206,7 @@ def _ct_transforms(task_name: str, train: bool) -> Compose:
     base   = [
         LoadImaged(keys=keys),
         EnsureChannelFirstd(keys=keys),
+        Lambdad(keys=["label"], func=_binarize_label),
         Spacingd(keys=keys, pixdim=cfg["spacing"], mode=("bilinear", "nearest")),
         Orientationd(keys=keys, axcodes="RAS"),
         ScaleIntensityRanged(keys=["image"], a_min=a_min, a_max=a_max,
@@ -209,10 +215,11 @@ def _ct_transforms(task_name: str, train: bool) -> Compose:
     ]
     if train:
         base += [
+            SpatialPadd(keys=keys, spatial_size=(96, 96, 96)),
             RandCropByPosNegLabeld(keys=keys, label_key="label",
                                    spatial_size=(96, 96, 96),
                                    pos=1, neg=1, num_samples=4,
-                                   allow_smaller=True),  # FIXED: Allow smaller crops
+                                   allow_smaller=True),
             RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
             RandRotate90d(keys=keys, prob=0.5, max_k=3),
             # Intensity augmentation — improves generalisation across scanners
@@ -230,6 +237,7 @@ def _mri_transforms(task_name: str, train: bool) -> Compose:
     base = [
         LoadImaged(keys=keys),
         EnsureChannelFirstd(keys=keys),
+        Lambdad(keys=["label"], func=_binarize_label),
         Spacingd(keys=keys, pixdim=cfg["spacing"], mode=("bilinear", "nearest")),
         Orientationd(keys=keys, axcodes="RAS"),
         NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
@@ -237,10 +245,11 @@ def _mri_transforms(task_name: str, train: bool) -> Compose:
     ]
     if train:
         base += [
+            SpatialPadd(keys=keys, spatial_size=(96, 96, 96)),
             RandCropByPosNegLabeld(keys=keys, label_key="label",
                                    spatial_size=(96, 96, 96),
                                    pos=1, neg=1, num_samples=4,
-                                   allow_smaller=True),  # FIXED: Allow smaller crops
+                                   allow_smaller=True),
             RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
             # MRI has high inter-scanner variability — stronger intensity aug
             RandGaussianNoised(keys=["image"], prob=0.2, std=0.05),

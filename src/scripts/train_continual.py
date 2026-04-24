@@ -136,32 +136,12 @@ def train_one_epoch(model, loader, optimizer, scaler, criterion,
 
     for batch_idx, batch in enumerate(loader):
         try:
-            # FIXED: Convert MetaTensor to regular tensor before GPU transfer
-            imgs   = batch["image"]
-            labels = batch["label"]
-            
-            # Convert MetaTensor to regular tensor to avoid CUDA issues
-            if hasattr(imgs, 'as_array'):
-                imgs = torch.tensor(imgs.as_array(), device=device)
-            else:
-                imgs = imgs.to(device)
-                
-            if hasattr(labels, 'as_array'):
-                labels = torch.tensor(labels.as_array(), device=device)
-            else:
-                labels = labels.to(device)
-            
-            labels = _safe_label(labels)
-            
-            # FIXED: Validate batch shapes on first batch
+            imgs   = batch["image"].to(device)
+            labels = _safe_label(batch["label"]).to(device)
+
             if batch_idx == 0:
-                if imgs.shape[0] == 0:
-                    raise ValueError("Empty batch received")
-                if torch.isnan(imgs).any():
-                    raise ValueError("NaN values in image tensor")
-                if torch.isnan(labels).any():
-                    raise ValueError("NaN values in label tensor")
-                print(f"    ✓ Batch validation passed: img={imgs.shape}, lbl={labels.shape}")
+                print(f"    ✓ Batch shapes: img={imgs.shape}, lbl={labels.shape}, "
+                      f"label range=[{labels.min().item():.0f},{labels.max().item():.0f}]")
             
             optimizer.zero_grad()
 
