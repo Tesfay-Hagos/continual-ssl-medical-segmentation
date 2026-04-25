@@ -160,6 +160,10 @@ restore_checkpoint("pretrain_done.json",
                    Path(os.path.join(OUT_DIR, "pretrain")),
                    "pretrain-checkpoint", WANDB_PROJECT,
                    GDRIVE_FOLDER_ID, GDRIVE_CREDENTIALS)
+restore_checkpoint("best.pth",
+                   Path(os.path.join(OUT_DIR, "pretrain")),
+                   "pretrain-checkpoint", WANDB_PROJECT,
+                   GDRIVE_FOLDER_ID, GDRIVE_CREDENTIALS)
 
 if os.path.exists(PRETRAIN_DONE):
     import json as _json

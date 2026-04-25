@@ -97,7 +97,10 @@ def _resume(ckpt_dir: Path, model, optimizer, scheduler, scaler,
         return 0, 0.0, float("inf"), None
     state = torch.load(path, map_location="cpu")
     model.load_state_dict(state["model"])
-    optimizer.load_state_dict(state["optimizer"])
+    try:
+        optimizer.load_state_dict(state["optimizer"])
+    except (ValueError, RuntimeError) as e:
+        print(f"  ⚠️  Optimizer state skipped ({e}) — optimizer starts fresh")
     scheduler.load_state_dict(state["scheduler"])
     if "scaler" in state:
         scaler.load_state_dict(state["scaler"])
@@ -249,7 +252,8 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
     scheduler = _make_scheduler(optimizer, n_epochs, warmup_epochs)
     scaler    = torch.amp.GradScaler(device.type, enabled=(device.type == "cuda"))
 
-    artifact_name = f"cl-{cfg.get('strategy','none')}-{task_name}"
+    run_id = cfg.get("wandb_run", cfg.get("strategy", "none"))
+    artifact_name = f"cl-{run_id}-{task_name}"
     gdrive_folder = cfg.get("gdrive_folder_id", "")
     gdrive_creds  = cfg.get("gdrive_credentials", "")
 
