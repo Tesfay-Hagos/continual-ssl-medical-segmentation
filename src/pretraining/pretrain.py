@@ -130,11 +130,14 @@ def _run_epoch(model, loader, optimizer, scaler, device) -> float:
 
 def _update_checkpoints(out_dir: Path, epoch: int, avg: float,
                          best_loss: float, save_every: int,
-                         model, n_epochs: int) -> float:
+                         model, n_epochs: int,
+                         gdrive_folder: str = "", gdrive_creds: str = "") -> float:
     if (epoch + 1) % save_every == 0 or epoch == n_epochs - 1:
         torch.save(model.encoder.state_dict(), out_dir / f"epoch-{epoch+1}.pth")
     if avg < best_loss:
-        torch.save(model.encoder.state_dict(), out_dir / "best.pth")
+        best_path = out_dir / "best.pth"
+        torch.save(model.encoder.state_dict(), best_path)
+        save_checkpoint(best_path, _ARTIFACT_NAME, gdrive_folder, gdrive_creds)
         return avg
     return best_loss
 
@@ -210,7 +213,8 @@ def pretrain(cfg: dict):
                        "epoch": epoch + 1})
 
         best_loss = _update_checkpoints(out_dir, epoch, avg, best_loss,
-                                         save_every, model, n_epochs)
+                                         save_every, model, n_epochs,
+                                         gdrive_folder, gdrive_creds)
         _save_state(out_dir, epoch + 1, model, optimizer, scheduler, scaler,
                     best_loss, best_ema, use_wandb, gdrive_folder, gdrive_creds)
 

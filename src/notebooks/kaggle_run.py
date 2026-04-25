@@ -165,6 +165,20 @@ restore_checkpoint("best.pth",
                    "pretrain-checkpoint", WANDB_PROJECT,
                    GDRIVE_FOLDER_ID, GDRIVE_CREDENTIALS)
 
+# Fallback: extract encoder weights from latest.pth if best.pth missing
+if not os.path.exists(PRETRAIN_CKPT):
+    restore_checkpoint("latest.pth",
+                       Path(os.path.join(OUT_DIR, "pretrain")),
+                       "pretrain-checkpoint", WANDB_PROJECT,
+                       GDRIVE_FOLDER_ID, GDRIVE_CREDENTIALS)
+    _latest = os.path.join(OUT_DIR, "pretrain", "latest.pth")
+    if os.path.exists(_latest):
+        _full = torch.load(_latest, map_location="cpu")["model"]
+        _enc  = {k[len("encoder."):]: v
+                 for k, v in _full.items() if k.startswith("encoder.")}
+        torch.save(_enc, PRETRAIN_CKPT)
+        print(f"Extracted encoder weights from latest.pth → best.pth")
+
 if os.path.exists(PRETRAIN_DONE):
     import json as _json
     _info = _json.load(open(PRETRAIN_DONE))
