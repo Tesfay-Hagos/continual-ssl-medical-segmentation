@@ -200,29 +200,7 @@ else:
 # %%
 from scripts.train_continual import run as run_continual
 
-TASK_ORDER = ["liver", "heart"]   # core 2-task run; add "pancreas" later
-
-baseline_cfg = {
-    "strategy":        "none",
-    "use_pretrained":  False,
-    "task_roots":      TASK_ROOTS,
-    "output_dir":      os.path.join(OUT_DIR, "baseline_finetune"),
-    "task_order":      TASK_ORDER,
-    "channels":        [32, 64, 128, 256, 512],
-    "strides":         [2, 2, 2, 2],
-    "epochs_per_task": 15,
-    "batch_size":      2,
-    "lr":              1e-4,
-    "weight_decay":    1e-5,
-    "num_workers":     2 if ON_KAGGLE else 0,
-    "cache_rate":      0.1,
-    "use_wandb":       USE_WANDB,
-    "wandb_project":   WANDB_PROJECT,
-    "wandb_run":       "baseline_finetune",
-}
-
-print("=== BASELINE: Fine-tune only (catastrophic forgetting) ===")
-run_continual(baseline_cfg)
+TASK_ORDER = ["liver", "pancreas", "heart"]   # full 3-task smoke-test for EWC+SSL
 
 # %% [markdown]
 # ## 4 — EWC experiments
@@ -248,16 +226,7 @@ ewc_base.update({
     "gdrive_credentials": GDRIVE_CREDENTIALS,
 })
 
-# 4a — EWC, no pretraining
-ewc_no_ssl = {**ewc_base,
-              "use_pretrained": False,
-              "wandb_run":      "ewc_no_ssl",
-              "output_dir":     os.path.join(OUT_DIR, "ewc_no_ssl")}
-print("=== EWC — no pretraining ===")
-run_continual(ewc_no_ssl)
-
-# %%
-# 4b — EWC, with SparK pretraining
+# 4b — EWC, with SparK pretraining  (smoke-test: run this alone first)
 ewc_ssl = {**ewc_base,
            "use_pretrained":  True,
            "pretrained_ckpt": PRETRAIN_CKPT,
@@ -287,13 +256,11 @@ lwf_base.update({
     "gdrive_credentials": GDRIVE_CREDENTIALS,
 })
 
-# 5a — LwF, no pretraining
-lwf_no_ssl = {**lwf_base,
-              "use_pretrained": False,
-              "wandb_run":      "lwf_no_ssl",
-              "output_dir":     os.path.join(OUT_DIR, "lwf_no_ssl")}
-print("=== LwF — no pretraining ===")
-run_continual(lwf_no_ssl)
+# LwF — skipped for now, run after EWC+SSL smoke-test passes
+# lwf_no_ssl = {**lwf_base, "use_pretrained": False,
+#               "wandb_run": "lwf_no_ssl",
+#               "output_dir": os.path.join(OUT_DIR, "lwf_no_ssl")}
+# run_continual(lwf_no_ssl)
 
 # %% [markdown]
 # ## 6 — Results
