@@ -32,7 +32,9 @@ try:
 except ImportError:
     _WANDB = False
 
-_ARTIFACT_NAME = "pretrain-checkpoint"
+_ARTIFACT_CKPT   = "pretrain-checkpoint"   # latest.pth  — training state
+_ARTIFACT_ENCODER = "pretrain-encoder"     # best.pth    — encoder weights only
+_ARTIFACT_DONE    = "pretrain-done"        # pretrain_done.json — completion marker
 
 
 def get_ssl_transforms(patch_size: int = 96) -> Compose:
@@ -79,7 +81,7 @@ def _make_scheduler(optimizer, n_epochs: int, warmup_epochs: int):
 
 def _resume(out_dir: Path, model, optimizer, scheduler, scaler,
             project: str, use_wandb: bool, gdrive_folder: str, gdrive_creds: str):
-    restore_checkpoint("latest.pth", out_dir, _ARTIFACT_NAME,
+    restore_checkpoint("latest.pth", out_dir, _ARTIFACT_CKPT,
                        project, gdrive_folder, gdrive_creds)
     path = out_dir / "latest.pth"
     if not path.exists():
@@ -107,7 +109,7 @@ def _save_state(out_dir: Path, epoch: int, model, optimizer, scheduler, scaler,
                 "best_loss": best_loss,
                 "best_loss_ema": best_loss_ema,
                 "wandb_run_id": run_id}, path)
-    save_checkpoint(path, _ARTIFACT_NAME, gdrive_folder, gdrive_creds)
+    save_checkpoint(path, _ARTIFACT_CKPT, gdrive_folder, gdrive_creds)
 
 
 # ── Training ──────────────────────────────────────────────────────────────────
@@ -137,7 +139,7 @@ def _update_checkpoints(out_dir: Path, epoch: int, avg: float,
     if avg < best_loss:
         best_path = out_dir / "best.pth"
         torch.save(model.encoder.state_dict(), best_path)
-        save_checkpoint(best_path, _ARTIFACT_NAME, gdrive_folder, gdrive_creds)
+        save_checkpoint(best_path, _ARTIFACT_ENCODER, gdrive_folder, gdrive_creds)
         return avg
     return best_loss
 
@@ -229,7 +231,7 @@ def pretrain(cfg: dict):
     done_path = out_dir / "pretrain_done.json"
     done_path.write_text(json.dumps({"epochs_completed": epoch + 1,
                                       "best_loss": best_loss}))
-    save_checkpoint(done_path, _ARTIFACT_NAME, gdrive_folder, gdrive_creds)
+    save_checkpoint(done_path, _ARTIFACT_DONE, gdrive_folder, gdrive_creds)
 
     if _WANDB and use_wandb:
         wandb.finish()
