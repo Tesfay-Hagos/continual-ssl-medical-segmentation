@@ -298,8 +298,7 @@ def _train_task(model, task_name: str, t: int, cfg: dict, criterion,
               best_val_dsc, best_val_loss,
               artifact_name, gdrive_folder, gdrive_creds)
 
-        if val_dsc > best_val_loss:
-            best_val_loss = val_dsc
+        if val_dsc >= best_val_dsc:
             trigger = 0
         else:
             trigger += 1

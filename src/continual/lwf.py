@@ -73,7 +73,7 @@ class LwF:
 
         for t_pred in teacher_preds:
             # KL(teacher || student) summed over spatial dims
-            kl = F.kl_div(student_log, t_pred, reduction="batchmean")
+            kl = F.kl_div(student_log, t_pred, reduction="mean")
             loss += (T ** 2) * kl   # temperature scaling restores gradient magnitude
 
         return self.alpha * loss / max(len(self._teachers), 1)
