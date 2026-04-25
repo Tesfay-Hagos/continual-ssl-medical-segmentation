@@ -16,7 +16,7 @@ fisher_batches:    100
 # Training per task
 epochs_per_task:   15
 warmup_epochs:     2
-encoder_lr_scale:  0.1
+encoder_lr_scale:  1.0
 batch_size:        2
 lr:                1.0e-4
 weight_decay:      1.0e-5
