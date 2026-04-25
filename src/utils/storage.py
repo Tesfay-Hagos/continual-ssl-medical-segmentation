@@ -58,11 +58,11 @@ def wandb_download(artifact_name: str, filename: str,
     if (dest_dir / filename).exists():
         return False
     try:
-        # Include entity prefix when a run is active so the path resolves correctly
-        # e.g. "my-entity/cssl-medical/pretrain-checkpoint:latest"
-        entity = wandb.run.entity if (wandb.run is not None) else None
+        api    = wandb.Api()
+        entity = (wandb.run.entity if wandb.run is not None
+                  else api.default_entity)
         prefix = f"{entity}/{project}" if entity else project
-        art  = wandb.Api().artifact(f"{prefix}/{artifact_name}:latest")
+        art  = api.artifact(f"{prefix}/{artifact_name}:latest")
         art.get_path(filename).download(root=str(dest_dir))
         print(f"  ✅ Restored {filename} from WandB ({artifact_name})")
         return True
