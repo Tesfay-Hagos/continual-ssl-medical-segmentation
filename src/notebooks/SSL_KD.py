@@ -23,7 +23,7 @@
 # ### Before running on Kaggle
 # 1. Add dataset input: `vivekprajapati2048/medical-segmentation-decathlon-heart`
 # 2. Enable GPU (P100 or T4)
-# 3. Add Kaggle secret: `WANDB_API_KEY`
+# 3. Add Kaggle secret: `SSL_KD_WANDB`
 # 4. Run all cells top-to-bottom
 
 # %% [markdown]
