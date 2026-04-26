@@ -64,7 +64,7 @@ if ON_KAGGLE:
     subprocess.run(
         [sys.executable, "-m", "pip", "install",
          "monai[all]", "nibabel", "scipy", "scikit-image", "pyyaml",
-         "wandb", "scikit-learn", "--quiet"],
+         "wandb", "scikit-learn", "pandas", "matplotlib", "seaborn", "--quiet"],
         check=True
     )
     print("Dependencies installed.")
@@ -208,11 +208,11 @@ TRAIN_CFG = {
     "num_workers":     2 if ON_KAGGLE else 0,
     "cache_rate":      1.0,
     "pin_memory":      False,
-    "epochs":          300,
-    "warmup_epochs":   10,
-    "lr":              1.0e-4,
+    "epochs":          50,    # Reduced from 300 for one-day run
+    "warmup_epochs":   5,     # Reduced from 10
+    "lr":              2.0e-4, # Slightly higher LR for faster convergence
     "weight_decay":    1.0e-5,
-    "patience":        50,
+    "patience":        20,    # Reduced from 50
     # KD
     "kd_alpha":        1.0,   # weight of KD loss relative to DiceCE
     "kd_temperature":  2.0,
@@ -670,6 +670,163 @@ if "upper_bound" in dsc_stats and "ssl_kd" in dsc_stats and "baseline" in dsc_st
         print(f"  Gap to upper bound       :  {gap_to_ub:+.3f} DSC")
         print(f"  SSL+KD closes {pct_closed:.1f}% of gap to supervised UB")
 
+# %% [markdown]
+# ## 7 — Publication Figures
+
+# %%
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Set publication style
+plt.style.use('seaborn-v0_8-whitegrid')
+sns.set_palette("husl")
+plt.rcParams.update({
+    'font.size': 12,
+    'axes.titlesize': 14,
+    'axes.labelsize': 12,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'legend.fontsize': 11,
+    'figure.titlesize': 16
+})
+
+fig_dir = Path(OUT_DIR) / "figures"
+fig_dir.mkdir(exist_ok=True)
+
+# %%
+# Figure 1: Method comparison bar plot with error bars
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+methods = ['Baseline\n(Random)', 'SSL Only\n(SparK)', 'SSL + KD\n(SparK)', 'Upper Bound\n(All Labels)']
+method_keys = ['baseline', 'ssl_only', 'ssl_kd', 'upper_bound']
+colors = ['#ff7f7f', '#7fbf7f', '#7f7fff', '#bf7fbf']
+
+# DSC plot
+dsc_means = [dsc_stats[k]['mean'] if k in dsc_stats else 0 for k in method_keys]
+dsc_stds = [dsc_stats[k]['std'] if k in dsc_stats else 0 for k in method_keys]
+
+bars1 = ax1.bar(methods, dsc_means, yerr=dsc_stds, capsize=5, color=colors, alpha=0.8, edgecolor='black')
+ax1.set_ylabel('Dice Similarity Coefficient')
+ax1.set_title('Heart Segmentation Performance')
+ax1.set_ylim(0, 1.0)
+ax1.grid(axis='y', alpha=0.3)
+
+# Add value labels on bars
+for bar, mean, std in zip(bars1, dsc_means, dsc_stds):
+    if mean > 0:
+        ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 0.01,
+                f'{mean:.3f}±{std:.3f}', ha='center', va='bottom', fontweight='bold')
+
+# HD95 plot
+hd95_means = [hd95_stats[k]['mean'] if k in hd95_stats else 0 for k in method_keys]
+hd95_stds = [hd95_stats[k]['std'] if k in hd95_stats else 0 for k in method_keys]
+
+bars2 = ax2.bar(methods, hd95_means, yerr=hd95_stds, capsize=5, color=colors, alpha=0.8, edgecolor='black')
+ax2.set_ylabel('Hausdorff Distance 95% (mm)')
+ax2.set_title('Boundary Accuracy')
+ax2.grid(axis='y', alpha=0.3)
+
+# Add value labels on bars
+for bar, mean, std in zip(bars2, hd95_means, hd95_stds):
+    if mean > 0:
+        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 1,
+                f'{mean:.1f}±{std:.1f}', ha='center', va='bottom', fontweight='bold')
+
+plt.tight_layout()
+fig.savefig(fig_dir / 'method_comparison.png', dpi=300, bbox_inches='tight')
+fig.savefig(fig_dir / 'method_comparison.pdf', bbox_inches='tight')
+print(f"Figure 1 saved: {fig_dir / 'method_comparison.png'}")
+
+# %%
+# Figure 2: Individual fold results (box plot)
+fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+# Collect all fold data
+fold_data = []
+for method_key, method_label in zip(method_keys, methods):
+    for fold in range(N_FOLDS):
+        fold_key = f"fold_{fold}"
+        if fold_key in cv_results and method_key in cv_results[fold_key]:
+            dsc_val = cv_results[fold_key][method_key].get('best_dsc', None)
+            if dsc_val is not None:
+                fold_data.append({
+                    'Method': method_label,
+                    'DSC': dsc_val,
+                    'Fold': fold + 1
+                })
+
+if fold_data:
+    import pandas as pd
+    df = pd.DataFrame(fold_data)
+    
+    # Box plot with individual points
+    sns.boxplot(data=df, x='Method', y='DSC', ax=ax, palette=colors)
+    sns.stripplot(data=df, x='Method', y='DSC', ax=ax, color='black', alpha=0.7, size=8)
+    
+    ax.set_ylabel('Dice Similarity Coefficient')
+    ax.set_title('Cross-Validation Results (Individual Folds)')
+    ax.set_ylim(0, 1.0)
+    ax.grid(axis='y', alpha=0.3)
+    
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    fig.savefig(fig_dir / 'cv_boxplot.png', dpi=300, bbox_inches='tight')
+    fig.savefig(fig_dir / 'cv_boxplot.pdf', bbox_inches='tight')
+    print(f"Figure 2 saved: {fig_dir / 'cv_boxplot.png'}")
+
+# %%
+# Figure 3: Improvement analysis
+fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+if 'baseline' in dsc_stats and 'ssl_only' in dsc_stats and 'ssl_kd' in dsc_stats:
+    baseline_mean = dsc_stats['baseline']['mean']
+    ssl_mean = dsc_stats['ssl_only']['mean']
+    kd_mean = dsc_stats['ssl_kd']['mean']
+    
+    improvements = {
+        'SSL Pretraining\nGain': ssl_mean - baseline_mean,
+        'Knowledge Distillation\nGain': kd_mean - ssl_mean,
+        'Total SSL+KD\nGain': kd_mean - baseline_mean
+    }
+    
+    bars = ax.bar(improvements.keys(), improvements.values(), 
+                  color=['#7fbf7f', '#7f7fff', '#bf7fbf'], alpha=0.8, edgecolor='black')
+    
+    ax.set_ylabel('DSC Improvement')
+    ax.set_title('Contribution Analysis')
+    ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+    ax.grid(axis='y', alpha=0.3)
+    
+    # Add value labels
+    for bar, val in zip(bars, improvements.values()):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
+                f'{val:+.3f}', ha='center', va='bottom', fontweight='bold')
+    
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    fig.savefig(fig_dir / 'improvement_analysis.png', dpi=300, bbox_inches='tight')
+    fig.savefig(fig_dir / 'improvement_analysis.pdf', bbox_inches='tight')
+    print(f"Figure 3 saved: {fig_dir / 'improvement_analysis.png'}")
+
+# %%
+# Create figure summary for paper
+fig_summary = {
+    "figures_generated": [
+        "method_comparison.png - Main results bar chart with error bars",
+        "cv_boxplot.png - Cross-validation individual fold results", 
+        "improvement_analysis.png - SSL and KD contribution breakdown"
+    ],
+    "figure_directory": str(fig_dir),
+    "formats": ["PNG (300 DPI)", "PDF (vector)"]
+}
+
+fig_summary_path = fig_dir / "figure_summary.json"
+fig_summary_path.write_text(json.dumps(fig_summary, indent=2))
+print(f"\nFigure summary: {fig_summary_path}")
+print("\n📊 Publication figures generated:")
+for fig_desc in fig_summary["figures_generated"]:
+    print(f"  ✅ {fig_desc}")
+
 # %%
 # Save CV results
 cv_results_path = Path(OUT_DIR) / "ssl_kd_cv_results.json"
@@ -681,7 +838,8 @@ summary = {
     "dsc_stats":  dsc_stats,
     "hd95_stats": hd95_stats,
     "n_folds":    N_FOLDS,
-    "seed":       SEED
+    "seed":       SEED,
+    "figures":    fig_summary
 }
 summary_path = Path(OUT_DIR) / "ssl_kd_summary.json"
 summary_path.write_text(json.dumps(summary, indent=2))
@@ -690,4 +848,7 @@ print(f"Summary stats saved to {summary_path}")
 if USE_WANDB:
     save_checkpoint(cv_results_path, "ssl-kd-cv-results", "", "")
     save_checkpoint(summary_path, "ssl-kd-summary", "", "")
-    print("Results uploaded to WandB artifacts")
+    # Upload figures to WandB
+    for fig_file in fig_dir.glob("*.png"):
+        save_checkpoint(fig_file, f"figure-{fig_file.stem}", "", "")
+    print("Results and figures uploaded to WandB artifacts")
