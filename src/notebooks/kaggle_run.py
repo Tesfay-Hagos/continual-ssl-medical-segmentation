@@ -214,7 +214,7 @@ else:
 # %%
 from scripts.train_continual import run as run_continual
 
-TASK_ORDER = ["liver", "pancreas", "heart"]   # full 3-task smoke-test for EWC+SSL
+TASK_ORDER = ["liver", "heart"]   # 2-task focused experiment (liver→heart)
 
 # %% [markdown]
 # ## 4 — EWC experiments
@@ -224,6 +224,8 @@ TASK_ORDER = ["liver", "pancreas", "heart"]   # full 3-task smoke-test for EWC+S
 #
 # Comparing 4a vs 4b directly answers **RQ3**:
 # does SSL pretraining act as an implicit anti-forgetting regularizer?
+#
+# ewc_lambda raised to 5000 (from 1000) to properly protect pretrained features.
 
 # %%
 cfg_path = os.path.join(SRC_DIR, "configs", "ewc.yaml")
@@ -240,7 +242,15 @@ ewc_base.update({
     "gdrive_credentials": GDRIVE_CREDENTIALS,
 })
 
-# 4b — EWC, with SparK pretraining  (smoke-test: run this alone first)
+# 4a — EWC, no pretraining (lower bound — random init)
+ewc_no_ssl = {**ewc_base,
+              "use_pretrained": False,
+              "wandb_run":      "ewc_no_ssl",
+              "output_dir":     os.path.join(OUT_DIR, "ewc_no_ssl")}
+print("=== EWC — random init ===")
+run_continual(ewc_no_ssl)
+
+# 4b — EWC, with SparK pretraining
 ewc_ssl = {**ewc_base,
            "use_pretrained":  True,
            "pretrained_ckpt": PRETRAIN_CKPT,
@@ -286,10 +296,8 @@ from evaluation.metrics import (backward_transfer, forgetting_measure,
                                  average_accuracy)
 
 EXPERIMENTS = {
-    "Fine-tune (baseline)": "baseline_finetune",
     "EWC (no SSL)":         "ewc_no_ssl",
     "EWC + SparK":          "ewc_ssl",
-    "LwF (no SSL)":         "lwf_no_ssl",
 }
 TASKS = TASK_ORDER
 
@@ -304,7 +312,7 @@ for label, folder in EXPERIMENTS.items():
         continue
     with open(result_path) as f:
         data = json.load(f)
-    R = np.array(data["R_matrix"])
+    R = np.array(data["R_dsc"])   # key is R_dsc (not R_matrix)
     last_row = R[-1]
     aa  = average_accuracy(R)
     bwt = backward_transfer(R) if R.shape[0] > 1 else float("nan")
