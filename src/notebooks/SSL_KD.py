@@ -106,7 +106,7 @@ except Exception as e:
     print(f"WandB login failed ({e}) — running without logging.")
 
 # %% [markdown]
-# ## 1 — Dataset setup
+# ## 1 — Heart Dataset Setup (SSL+KD Experiment)
 
 # %%
 from data.datasets import kaggle_task_roots, build_task_roots, verify_datasets
@@ -114,13 +114,15 @@ from data.datasets import kaggle_task_roots, build_task_roots, verify_datasets
 TASK_ROOTS = (kaggle_task_roots() if ON_KAGGLE
               else build_task_roots(os.environ.get("DATA_ROOT", "/data/decathlon")))
 
-if not verify_datasets(TASK_ROOTS):
+# Only verify heart dataset for SSL+KD experiment
+heart_root = TASK_ROOTS.get('heart')
+if not heart_root or not os.path.exists(heart_root):
     raise RuntimeError(
         "Heart dataset missing. "
         "Add vivekprajapati2048/medical-segmentation-decathlon-heart as Kaggle input."
     )
-print("Dataset OK.")
-print(f"  Heart root: {TASK_ROOTS.get('heart', 'NOT FOUND')}")
+print("Heart dataset verified ✅")
+print(f"  Heart root: {heart_root}")
 
 # %% [markdown]
 # ## 2 — SparK Pretraining (or restore from WandB)
