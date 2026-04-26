@@ -95,7 +95,7 @@ WANDB_PROJECT = "ssl-kd-heart"
 try:
     if ON_KAGGLE:
         from kaggle_secrets import UserSecretsClient
-        _key = UserSecretsClient().get_secret("WANDB_API_KEY")
+        _key = UserSecretsClient().get_secret("SSL_KD_WANDB")
         wandb.login(key=_key)
     else:
         wandb.login()
@@ -196,7 +196,7 @@ TRAIN_CFG = {
     "task_roots":      TASK_ROOTS,
     "batch_size":      2,
     "num_workers":     2 if ON_KAGGLE else 0,
-    "cache_rate":      0.5,   # heart has only 1 vol — cache it all
+    "cache_rate":      1.0,   # heart has only 1 vol — cache it all
     "pin_memory":      False,
     "epochs":          30,
     "warmup_epochs":   3,
@@ -294,6 +294,20 @@ def finetune(run_name: str, model, train_loader, val_loader,
     patience   = TRAIN_CFG["patience"]
     alpha      = TRAIN_CFG["kd_alpha"]
     T_kd       = TRAIN_CFG["kd_temperature"]
+    start_epoch = 0
+
+    # Resume from latest.pth if interrupted
+    resume_ckpt = ckpt_dir / "latest.pth"
+    if resume_ckpt.exists():
+        state = torch.load(resume_ckpt, map_location=DEVICE)
+        model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        scheduler.load_state_dict(state["scheduler"])
+        start_epoch = state["epoch"] + 1
+        best_dsc    = state["best_dsc"]
+        best_hd95   = state["best_hd95"]
+        trigger     = state["trigger"]
+        print(f"  Resumed {run_name} from epoch {start_epoch}, best_dsc={best_dsc:.4f}")
 
     if teacher is not None:
         teacher.eval()
@@ -301,7 +315,7 @@ def finetune(run_name: str, model, train_loader, val_loader,
             p.requires_grad = False
         print(f"  KD enabled (alpha={alpha}, T={T_kd})")
 
-    for epoch in range(TRAIN_CFG["epochs"]):
+    for epoch in range(start_epoch, TRAIN_CFG["epochs"]):
         model.train()
         epoch_loss = 0.0
         n_batches  = 0
@@ -364,6 +378,15 @@ def finetune(run_name: str, model, train_loader, val_loader,
                 print(f"  Early stopping at epoch {epoch+1}.")
                 break
 
+        # Save resume checkpoint every epoch
+        torch.save({"model":     model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "epoch":     epoch,
+                    "best_dsc":  best_dsc,
+                    "best_hd95": best_hd95,
+                    "trigger":   trigger}, resume_ckpt)
+
     log_wandb({f"{run_name}/best_dsc": best_dsc,
                f"{run_name}/best_hd95": best_hd95})
     print(f"  [{run_name}] Done. Best DSC={best_dsc:.4f}  HD95={best_hd95:.1f}")
@@ -385,54 +408,80 @@ train_loader, val_loader = get_loaders(
 print(f"Heart loader — train batches: {len(train_loader)}, "
       f"val batches: {len(val_loader)}")
 
+# Restore results from previous run if the cell is re-executed after a crash
+_results_path = Path(OUT_DIR) / "ssl_kd_results.json"
 results = {}
+if _results_path.exists():
+    results = json.loads(_results_path.read_text())
+    print(f"Restored previous results: {list(results.keys())}")
+
+def _save_results():
+    _results_path.write_text(json.dumps(results, indent=2))
 
 # %%
 # --- Experiment A: Baseline (random init, DiceCE only) ---
-if USE_WANDB:
-    wandb.init(project=WANDB_PROJECT, name="baseline", reinit=True,
-               config={**MODEL_CFG, **TRAIN_CFG, "use_pretrained": False, "kd": False})
-
-print("\n=== Experiment A: Baseline (random init) ===")
-model_baseline = build_model(pretrained=False)
-results["baseline"] = finetune("baseline", model_baseline,
-                                train_loader, val_loader, teacher=None)
-if USE_WANDB:
-    wandb.finish()
+if "baseline" in results:
+    print("Experiment A already done — skipping.")
+else:
+    if USE_WANDB:
+        wandb.init(project=WANDB_PROJECT, name="baseline", reinit=True,
+                   config={**MODEL_CFG, **TRAIN_CFG, "use_pretrained": False, "kd": False})
+    try:
+        print("\n=== Experiment A: Baseline (random init) ===")
+        model_baseline = build_model(pretrained=False)
+        results["baseline"] = finetune("baseline", model_baseline,
+                                       train_loader, val_loader, teacher=None)
+        _save_results()
+    finally:
+        if USE_WANDB:
+            wandb.finish()
 
 # %%
 # --- Experiment B: SSL only (SparK pretrained, DiceCE only) ---
-if USE_WANDB:
-    wandb.init(project=WANDB_PROJECT, name="ssl_only", reinit=True,
-               config={**MODEL_CFG, **TRAIN_CFG, "use_pretrained": True, "kd": False})
-
-print("\n=== Experiment B: SSL only (SparK pretrained, no KD) ===")
-model_ssl = build_model(pretrained=True)
-results["ssl_only"] = finetune("ssl_only", model_ssl,
-                                train_loader, val_loader, teacher=None)
-if USE_WANDB:
-    wandb.finish()
+if "ssl_only" in results:
+    print("Experiment B already done — skipping.")
+else:
+    if USE_WANDB:
+        wandb.init(project=WANDB_PROJECT, name="ssl_only", reinit=True,
+                   config={**MODEL_CFG, **TRAIN_CFG, "use_pretrained": True, "kd": False})
+    try:
+        print("\n=== Experiment B: SSL only (SparK pretrained, no KD) ===")
+        model_ssl = build_model(pretrained=True)
+        results["ssl_only"] = finetune("ssl_only", model_ssl,
+                                       train_loader, val_loader, teacher=None)
+        _save_results()
+    finally:
+        if USE_WANDB:
+            wandb.finish()
 
 # %%
 # --- Experiment C: SSL + KD ---
-# Teacher = SSL-only model (already fine-tuned above)
-# Student = new model with SparK pretrained encoder + KD loss from teacher
-if USE_WANDB:
-    wandb.init(project=WANDB_PROJECT, name="ssl_kd", reinit=True,
-               config={**MODEL_CFG, **TRAIN_CFG, "use_pretrained": True, "kd": True})
+# Teacher = SSL-only model (Experiment B). Student = fresh pretrained encoder.
+if "ssl_kd" in results:
+    print("Experiment C already done — skipping.")
+else:
+    if "ssl_only" not in results:
+        raise RuntimeError(
+            "Experiment B (ssl_only) must complete before running SSL+KD. "
+            "Re-run the ssl_only cell first."
+        )
+    if USE_WANDB:
+        wandb.init(project=WANDB_PROJECT, name="ssl_kd", reinit=True,
+                   config={**MODEL_CFG, **TRAIN_CFG, "use_pretrained": True, "kd": True})
+    try:
+        print("\n=== Experiment C: SSL + KD ===")
+        teacher = build_model(pretrained=True)
+        teacher.load_state_dict(
+            torch.load(results["ssl_only"]["ckpt"], map_location=DEVICE))
+        teacher.eval()
 
-print("\n=== Experiment C: SSL + KD ===")
-# Load the best SSL teacher from checkpoint
-teacher = build_model(pretrained=True)
-teacher.load_state_dict(torch.load(results["ssl_only"]["ckpt"], map_location=DEVICE))
-teacher.eval()
-
-# Fresh student with pretrained encoder
-model_kd = build_model(pretrained=True)
-results["ssl_kd"] = finetune("ssl_kd", model_kd,
-                              train_loader, val_loader, teacher=teacher)
-if USE_WANDB:
-    wandb.finish()
+        model_kd = build_model(pretrained=True)
+        results["ssl_kd"] = finetune("ssl_kd", model_kd,
+                                     train_loader, val_loader, teacher=teacher)
+        _save_results()
+    finally:
+        if USE_WANDB:
+            wandb.finish()
 
 # %% [markdown]
 # ## 6 — Results
@@ -444,12 +493,12 @@ print("=" * 55)
 print(f"  {'Method':<22} {'DSC':>8} {'HD95':>10}")
 print("-" * 55)
 
-labels = {
+run_labels = {
     "baseline": "Baseline (random init)",
     "ssl_only": "SSL only (SparK)",
     "ssl_kd":   "SSL + KD",
 }
-for key, label in labels.items():
+for key, label in run_labels.items():
     r = results.get(key, {})
     dsc  = r.get("best_dsc",  float("nan"))
     hd95 = r.get("best_hd95", float("nan"))
