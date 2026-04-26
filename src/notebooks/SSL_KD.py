@@ -185,6 +185,16 @@ else:
 # ## 3 — Shared config and helpers
 
 # %%
+# Reproducibility seed — set before any model/data construction
+import random
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark     = False
+
 # Architecture — same as pretraining so encoder weights load cleanly
 MODEL_CFG = {
     "channels": [32, 64, 128, 256, 512],
@@ -196,13 +206,13 @@ TRAIN_CFG = {
     "task_roots":      TASK_ROOTS,
     "batch_size":      2,
     "num_workers":     2 if ON_KAGGLE else 0,
-    "cache_rate":      1.0,   # heart has only 1 vol — cache it all
+    "cache_rate":      1.0,
     "pin_memory":      False,
-    "epochs":          30,
-    "warmup_epochs":   3,
+    "epochs":          300,
+    "warmup_epochs":   10,
     "lr":              1.0e-4,
     "weight_decay":    1.0e-5,
-    "patience":        15,
+    "patience":        50,
     # KD
     "kd_alpha":        1.0,   # weight of KD loss relative to DiceCE
     "kd_temperature":  2.0,
@@ -212,7 +222,9 @@ TRAIN_CFG = {
 from models.unet import build_unet, UNetWithEncoder
 from monai.losses import DiceCELoss
 from monai.inferers import sliding_window_inference
-from data.datasets import get_loaders
+from monai.data import CacheDataset
+from torch.utils.data import DataLoader
+from data.datasets import get_loaders, get_file_list, get_transforms
 
 
 def build_model(pretrained: bool) -> UNetWithEncoder:
@@ -237,7 +249,7 @@ def make_scheduler(optimizer, epochs, warmup):
         optimizer, schedulers=[warmup_sched, cosine], milestones=[warmup])
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def evaluate(model, loader) -> dict:
     from evaluation.metrics import SegmentationEvaluator
     model.eval()
@@ -253,6 +265,21 @@ def evaluate(model, loader) -> dict:
 def log_wandb(metrics: dict):
     if USE_WANDB and wandb.run is not None:
         wandb.log(metrics)
+
+
+def get_all_label_loaders(task_roots, task_name, batch_size, num_workers):
+    """Load all labeled training volumes — used for the supervised upper bound."""
+    train_files, val_files = get_file_list(task_roots, task_name)
+    train_ds = CacheDataset(train_files,
+                            transform=get_transforms(task_name, train=True),
+                            cache_rate=1.0)
+    val_ds   = CacheDataset(val_files,
+                            transform=get_transforms(task_name, train=False),
+                            cache_rate=1.0)
+    return (DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                       num_workers=num_workers, pin_memory=False),
+            DataLoader(val_ds,   batch_size=1,          shuffle=False,
+                       num_workers=num_workers, pin_memory=False))
 
 # %% [markdown]
 # ## 4 — Fine-tuning loop (shared by all three experiments)
@@ -293,7 +320,7 @@ def finetune(run_name: str, model, train_loader, val_loader,
     trigger    = 0
     patience   = TRAIN_CFG["patience"]
     alpha      = TRAIN_CFG["kd_alpha"]
-    T_kd       = TRAIN_CFG["kd_temperature"]
+    t_kd       = TRAIN_CFG["kd_temperature"]
     start_epoch = 0
 
     # Resume from latest.pth if interrupted
@@ -313,7 +340,7 @@ def finetune(run_name: str, model, train_loader, val_loader,
         teacher.eval()
         for p in teacher.parameters():
             p.requires_grad = False
-        print(f"  KD enabled (alpha={alpha}, T={T_kd})")
+        print(f"  KD enabled (alpha={alpha}, T={t_kd})")
 
     for epoch in range(start_epoch, TRAIN_CFG["epochs"]):
         model.train()
@@ -332,12 +359,12 @@ def finetune(run_name: str, model, train_loader, val_loader,
                 preds = model(imgs)
                 loss  = criterion(preds, labels)
 
-                if teacher is not None:
-                    with torch.no_grad():
-                        t_soft = F.softmax(teacher(imgs) / T_kd, dim=1)
-                    s_log = F.log_softmax(preds / T_kd, dim=1)
-                    kd_loss = F.kl_div(s_log, t_soft, reduction="mean") * (T_kd ** 2)
-                    loss = loss + alpha * kd_loss
+            if teacher is not None:
+                with torch.inference_mode():
+                    t_soft = F.softmax(teacher(imgs).float() / t_kd, dim=1)
+                s_log   = F.log_softmax(preds.float() / t_kd, dim=1)
+                kd_loss = F.kl_div(s_log, t_soft, reduction="mean") * (t_kd ** 2)
+                loss    = loss + alpha * kd_loss
 
             if not torch.isfinite(loss):
                 optimizer.zero_grad()
@@ -483,36 +510,72 @@ else:
         if USE_WANDB:
             wandb.finish()
 
+# %%
+# --- Experiment D: Supervised upper bound (all labels, random init) ---
+# Trains on all available labeled volumes (same 80/20 split, seed=42).
+# Same val set as A/B/C — directly comparable. Cited alongside nnU-Net context.
+if "upper_bound" in results:
+    print("Experiment D already done — skipping.")
+else:
+    ub_train_loader, ub_val_loader = get_all_label_loaders(
+        TASK_ROOTS, "heart",
+        TRAIN_CFG["batch_size"], TRAIN_CFG["num_workers"])
+    if USE_WANDB:
+        wandb.init(project=WANDB_PROJECT, name="upper_bound", reinit=True,
+                   config={**MODEL_CFG, **TRAIN_CFG,
+                           "use_pretrained": False, "kd": False, "all_labels": True})
+    try:
+        print("\n=== Experiment D: Supervised upper bound (all labels) ===")
+        model_ub = build_model(pretrained=False)
+        results["upper_bound"] = finetune("upper_bound", model_ub,
+                                          ub_train_loader, ub_val_loader,
+                                          teacher=None)
+        _save_results()
+    finally:
+        if USE_WANDB:
+            wandb.finish()
+
 # %% [markdown]
 # ## 6 — Results
 
 # %%
 print("\n" + "=" * 55)
-print(f"  Heart segmentation — Task02 (1 labeled training volume)")
+print("  Heart segmentation — Task02 (1 labeled training volume)")
 print("=" * 55)
 print(f"  {'Method':<22} {'DSC':>8} {'HD95':>10}")
 print("-" * 55)
 
 run_labels = {
-    "baseline": "Baseline (random init)",
-    "ssl_only": "SSL only (SparK)",
-    "ssl_kd":   "SSL + KD",
+    "upper_bound": "Supervised UB (all labels)",
+    "baseline":    "Baseline (random, 1 label)",
+    "ssl_only":    "SSL only (SparK, 1 label)",
+    "ssl_kd":      "SSL + KD   (SparK, 1 label)",
 }
 for key, label in run_labels.items():
     r = results.get(key, {})
     dsc  = r.get("best_dsc",  float("nan"))
     hd95 = r.get("best_hd95", float("nan"))
-    print(f"  {label:<22} {dsc:>8.4f} {hd95:>10.2f}")
+    print(f"  {label:<30} {dsc:>8.4f} {hd95:>10.2f}")
 
+print("=" * 55)
+print("  NOTE: nnU-Net reports 0.923 DSC on the official Decathlon")
+print("  test server (different split) — cited as context only.")
 print("=" * 55)
 
 # Compute gains
 if "baseline" in results and "ssl_only" in results:
     gain_ssl = results["ssl_only"]["best_dsc"] - results["baseline"]["best_dsc"]
-    print(f"\n  SSL gain over baseline :  {gain_ssl:+.4f} DSC")
+    print(f"\n  SSL gain over baseline   :  {gain_ssl:+.4f} DSC")
 if "ssl_only" in results and "ssl_kd" in results:
     gain_kd = results["ssl_kd"]["best_dsc"] - results["ssl_only"]["best_dsc"]
-    print(f"  KD  gain over SSL-only :  {gain_kd:+.4f} DSC")
+    print(f"  KD  gain over SSL-only   :  {gain_kd:+.4f} DSC")
+if "upper_bound" in results and "ssl_kd" in results:
+    gap = results["upper_bound"]["best_dsc"] - results["ssl_kd"]["best_dsc"]
+    ub  = results["upper_bound"]["best_dsc"]
+    if ub > 0:
+        closed = (results["ssl_kd"]["best_dsc"] - results["baseline"]["best_dsc"]) / ub * 100
+        print(f"  Gap to upper bound       :  {gap:+.4f} DSC")
+        print(f"  SSL+KD closes {closed:.1f}% of gap to supervised UB")
 
 # %%
 # Save results JSON
