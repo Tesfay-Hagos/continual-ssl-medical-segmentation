@@ -72,8 +72,9 @@ class LwF:
         student_log = F.log_softmax(model(imgs) / T, dim=1)
 
         for t_pred in teacher_preds:
-            # KL(teacher || student) summed over spatial dims
-            kl = F.kl_div(student_log, t_pred, reduction="mean")
+            # KL(teacher || student) with per-voxel scaling to match segmentation loss scale
+            n_voxels = imgs.shape[2] * imgs.shape[3] * imgs.shape[4]  # D*H*W
+            kl = F.kl_div(student_log, t_pred, reduction="sum") / (imgs.shape[0] * n_voxels)
             loss += (T ** 2) * kl   # temperature scaling restores gradient magnitude
 
         return self.alpha * loss / max(len(self._teachers), 1)

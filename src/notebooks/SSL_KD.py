@@ -225,6 +225,7 @@ from monai.inferers import sliding_window_inference
 from monai.data import CacheDataset
 from torch.utils.data import DataLoader
 from data.datasets import get_loaders, get_file_list, get_transforms
+from sklearn.model_selection import KFold
 
 
 def build_model(pretrained: bool) -> UNetWithEncoder:
@@ -362,9 +363,12 @@ def finetune(run_name: str, model, train_loader, val_loader,
             if teacher is not None:
                 with torch.inference_mode():
                     t_soft = F.softmax(teacher(imgs).float() / t_kd, dim=1)
-                s_log   = F.log_softmax(preds.float() / t_kd, dim=1)
-                kd_loss = F.kl_div(s_log, t_soft, reduction="mean") * (t_kd ** 2)
-                loss    = loss + alpha * kd_loss
+                s_log    = F.log_softmax(preds.float() / t_kd, dim=1)
+                # Per-voxel scaling: same normalization as DiceCELoss
+                n_voxels = imgs.shape[2] * imgs.shape[3] * imgs.shape[4]  # D*H*W
+                kd_loss  = F.kl_div(s_log, t_soft, reduction="sum") / (imgs.shape[0] * n_voxels)
+                kd_loss  = kd_loss * (t_kd ** 2)
+                loss     = loss + alpha * kd_loss
 
             if not torch.isfinite(loss):
                 optimizer.zero_grad()
@@ -421,168 +425,276 @@ def finetune(run_name: str, model, train_loader, val_loader,
             "ckpt": str(ckpt_dir / "best.pth")}
 
 # %% [markdown]
-# ## 5 — Run experiments
+# ## 5 — Cross-validation setup and experiments
+#
+# 3-fold CV: each fold uses 13 train / 7 val volumes.
+# Reports mean ± std across folds for statistical validity.
 
 # %%
-# Build data loaders once — shared across all three runs
-train_loader, val_loader = get_loaders(
-    TASK_ROOTS, "heart",
-    batch_size=TRAIN_CFG["batch_size"],
-    num_workers=TRAIN_CFG["num_workers"],
-    cache_rate=TRAIN_CFG["cache_rate"],
-    pin_memory=TRAIN_CFG["pin_memory"])
+from sklearn.model_selection import KFold
 
-print(f"Heart loader — train batches: {len(train_loader)}, "
-      f"val batches: {len(val_loader)}")
+# Get all heart files for CV splitting
+train_files, val_files = get_file_list(TASK_ROOTS, "heart")
+all_files = train_files + val_files  # 20 volumes total
 
-# Restore results from previous run if the cell is re-executed after a crash
-_results_path = Path(OUT_DIR) / "ssl_kd_results.json"
-results = {}
-if _results_path.exists():
-    results = json.loads(_results_path.read_text())
-    print(f"Restored previous results: {list(results.keys())}")
+# 3-fold CV setup
+N_FOLDS = 3
+kf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=SEED)
+fold_splits = list(kf.split(all_files))
 
-def _save_results():
-    _results_path.write_text(json.dumps(results, indent=2))
+print(f"3-fold CV on {len(all_files)} heart volumes:")
+for fold, (train_idx, val_idx) in enumerate(fold_splits):
+    print(f"  Fold {fold+1}: {len(train_idx)} train, {len(val_idx)} val")
+
+# Restore CV results from previous run
+_cv_results_path = Path(OUT_DIR) / "ssl_kd_cv_results.json"
+cv_results = {}
+if _cv_results_path.exists():
+    cv_results = json.loads(_cv_results_path.read_text())
+    print(f"Restored CV results: {list(cv_results.keys())}")
+
+def _save_cv_results():
+    _cv_results_path.write_text(json.dumps(cv_results, indent=2))
+
+def get_fold_loaders(fold_idx, use_all_train=False):
+    """Get train/val loaders for a specific fold.
+    
+    Args:
+        fold_idx: which fold (0, 1, 2)
+        use_all_train: if True, use all training files (for upper bound)
+                      if False, use only 1 file (for few-shot experiments)
+    """
+    train_idx, val_idx = fold_splits[fold_idx]
+    
+    fold_train_files = [all_files[i] for i in train_idx]
+    fold_val_files   = [all_files[i] for i in val_idx]
+    
+    if not use_all_train:
+        # Few-shot: use only 1 training volume
+        fold_train_files = fold_train_files[:1]
+    
+    train_ds = CacheDataset(fold_train_files,
+                            transform=get_transforms("heart", train=True),
+                            cache_rate=1.0)
+    val_ds   = CacheDataset(fold_val_files,
+                            transform=get_transforms("heart", train=False),
+                            cache_rate=1.0)
+    
+    return (DataLoader(train_ds, batch_size=TRAIN_CFG["batch_size"], shuffle=True,
+                       num_workers=TRAIN_CFG["num_workers"], pin_memory=False),
+            DataLoader(val_ds,   batch_size=1, shuffle=False,
+                       num_workers=TRAIN_CFG["num_workers"], pin_memory=False))
 
 # %%
-# --- Experiment A: Baseline (random init, DiceCE only) ---
-if "baseline" in results:
-    print("Experiment A already done — skipping.")
-else:
-    if USE_WANDB:
-        wandb.init(project=WANDB_PROJECT, name="baseline", reinit=True,
-                   config={**MODEL_CFG, **TRAIN_CFG, "use_pretrained": False, "kd": False})
-    try:
-        print("\n=== Experiment A: Baseline (random init) ===")
-        model_baseline = build_model(pretrained=False)
-        results["baseline"] = finetune("baseline", model_baseline,
-                                       train_loader, val_loader, teacher=None)
-        _save_results()
-    finally:
+# Run all experiments across 3 folds
+for fold in range(N_FOLDS):
+    print(f"\n{'='*60}")
+    print(f"FOLD {fold+1}/{N_FOLDS}")
+    print(f"{'='*60}")
+    
+    fold_key = f"fold_{fold}"
+    if fold_key not in cv_results:
+        cv_results[fold_key] = {}
+    
+    # Get fold-specific loaders
+    train_loader, val_loader = get_fold_loaders(fold, use_all_train=False)
+    ub_train_loader, ub_val_loader = get_fold_loaders(fold, use_all_train=True)
+    
+    print(f"Fold {fold+1} loaders: train={len(train_loader)} batches, val={len(val_loader)} batches")
+    print(f"Upper bound: train={len(ub_train_loader)} batches")
+    
+    # --- Experiment A: Baseline ---
+    if "baseline" not in cv_results[fold_key]:
         if USE_WANDB:
-            wandb.finish()
-
-# %%
-# --- Experiment B: SSL only (SparK pretrained, DiceCE only) ---
-if "ssl_only" in results:
-    print("Experiment B already done — skipping.")
-else:
-    if USE_WANDB:
-        wandb.init(project=WANDB_PROJECT, name="ssl_only", reinit=True,
-                   config={**MODEL_CFG, **TRAIN_CFG, "use_pretrained": True, "kd": False})
-    try:
-        print("\n=== Experiment B: SSL only (SparK pretrained, no KD) ===")
-        model_ssl = build_model(pretrained=True)
-        results["ssl_only"] = finetune("ssl_only", model_ssl,
-                                       train_loader, val_loader, teacher=None)
-        _save_results()
-    finally:
+            wandb.init(project=WANDB_PROJECT, name=f"baseline_fold{fold+1}", reinit=True,
+                       config={**MODEL_CFG, **TRAIN_CFG, "fold": fold+1, "use_pretrained": False, "kd": False})
+        try:
+            print(f"\n=== Fold {fold+1} — Baseline (random init) ===")
+            model_baseline = build_model(pretrained=False)
+            cv_results[fold_key]["baseline"] = finetune(f"baseline_fold{fold+1}", model_baseline,
+                                                        train_loader, val_loader, teacher=None)
+            _save_cv_results()
+        finally:
+            if USE_WANDB:
+                wandb.finish()
+    else:
+        print(f"Fold {fold+1} baseline already done — skipping.")
+    
+    # --- Experiment B: SSL only ---
+    if "ssl_only" not in cv_results[fold_key]:
         if USE_WANDB:
-            wandb.finish()
-
-# %%
-# --- Experiment C: SSL + KD ---
-# Teacher = SSL-only model (Experiment B). Student = fresh pretrained encoder.
-if "ssl_kd" in results:
-    print("Experiment C already done — skipping.")
-else:
-    if "ssl_only" not in results:
-        raise RuntimeError(
-            "Experiment B (ssl_only) must complete before running SSL+KD. "
-            "Re-run the ssl_only cell first."
-        )
-    if USE_WANDB:
-        wandb.init(project=WANDB_PROJECT, name="ssl_kd", reinit=True,
-                   config={**MODEL_CFG, **TRAIN_CFG, "use_pretrained": True, "kd": True})
-    try:
-        print("\n=== Experiment C: SSL + KD ===")
-        teacher = build_model(pretrained=True)
-        teacher.load_state_dict(
-            torch.load(results["ssl_only"]["ckpt"], map_location=DEVICE))
-        teacher.eval()
-
-        model_kd = build_model(pretrained=True)
-        results["ssl_kd"] = finetune("ssl_kd", model_kd,
-                                     train_loader, val_loader, teacher=teacher)
-        _save_results()
-    finally:
+            wandb.init(project=WANDB_PROJECT, name=f"ssl_only_fold{fold+1}", reinit=True,
+                       config={**MODEL_CFG, **TRAIN_CFG, "fold": fold+1, "use_pretrained": True, "kd": False})
+        try:
+            print(f"\n=== Fold {fold+1} — SSL only (SparK pretrained) ===")
+            model_ssl = build_model(pretrained=True)
+            cv_results[fold_key]["ssl_only"] = finetune(f"ssl_only_fold{fold+1}", model_ssl,
+                                                        train_loader, val_loader, teacher=None)
+            _save_cv_results()
+        finally:
+            if USE_WANDB:
+                wandb.finish()
+    else:
+        print(f"Fold {fold+1} SSL only already done — skipping.")
+    
+    # --- Experiment C: SSL + KD ---
+    if "ssl_kd" not in cv_results[fold_key]:
+        if "ssl_only" not in cv_results[fold_key]:
+            raise RuntimeError(f"Fold {fold+1} SSL-only must complete before SSL+KD.")
+        
         if USE_WANDB:
-            wandb.finish()
-
-# %%
-# --- Experiment D: Supervised upper bound (all labels, random init) ---
-# Trains on all available labeled volumes (same 80/20 split, seed=42).
-# Same val set as A/B/C — directly comparable. Cited alongside nnU-Net context.
-if "upper_bound" in results:
-    print("Experiment D already done — skipping.")
-else:
-    ub_train_loader, ub_val_loader = get_all_label_loaders(
-        TASK_ROOTS, "heart",
-        TRAIN_CFG["batch_size"], TRAIN_CFG["num_workers"])
-    if USE_WANDB:
-        wandb.init(project=WANDB_PROJECT, name="upper_bound", reinit=True,
-                   config={**MODEL_CFG, **TRAIN_CFG,
-                           "use_pretrained": False, "kd": False, "all_labels": True})
-    try:
-        print("\n=== Experiment D: Supervised upper bound (all labels) ===")
-        model_ub = build_model(pretrained=False)
-        results["upper_bound"] = finetune("upper_bound", model_ub,
-                                          ub_train_loader, ub_val_loader,
-                                          teacher=None)
-        _save_results()
-    finally:
+            wandb.init(project=WANDB_PROJECT, name=f"ssl_kd_fold{fold+1}", reinit=True,
+                       config={**MODEL_CFG, **TRAIN_CFG, "fold": fold+1, "use_pretrained": True, "kd": True})
+        try:
+            print(f"\n=== Fold {fold+1} — SSL + KD ===")
+            teacher = build_model(pretrained=True)
+            teacher.load_state_dict(
+                torch.load(cv_results[fold_key]["ssl_only"]["ckpt"], map_location=DEVICE))
+            teacher.eval()
+            
+            model_kd = build_model(pretrained=True)
+            cv_results[fold_key]["ssl_kd"] = finetune(f"ssl_kd_fold{fold+1}", model_kd,
+                                                      train_loader, val_loader, teacher=teacher)
+            _save_cv_results()
+        finally:
+            if USE_WANDB:
+                wandb.finish()
+    else:
+        print(f"Fold {fold+1} SSL+KD already done — skipping.")
+    
+    # --- Experiment D: Upper bound ---
+    if "upper_bound" not in cv_results[fold_key]:
         if USE_WANDB:
-            wandb.finish()
+            wandb.init(project=WANDB_PROJECT, name=f"upper_bound_fold{fold+1}", reinit=True,
+                       config={**MODEL_CFG, **TRAIN_CFG, "fold": fold+1, "use_pretrained": False, "kd": False, "all_labels": True})
+        try:
+            print(f"\n=== Fold {fold+1} — Supervised upper bound ===")
+            model_ub = build_model(pretrained=False)
+            cv_results[fold_key]["upper_bound"] = finetune(f"upper_bound_fold{fold+1}", model_ub,
+                                                           ub_train_loader, ub_val_loader, teacher=None)
+            _save_cv_results()
+        finally:
+            if USE_WANDB:
+                wandb.finish()
+    else:
+        print(f"Fold {fold+1} upper bound already done — skipping.")
 
 # %% [markdown]
-# ## 6 — Results
+# ## 6 — Cross-validation results
 
 # %%
-print("\n" + "=" * 55)
-print("  Heart segmentation — Task02 (1 labeled training volume)")
-print("=" * 55)
-print(f"  {'Method':<22} {'DSC':>8} {'HD95':>10}")
-print("-" * 55)
+import numpy as np
 
-run_labels = {
+# Aggregate results across folds
+def compute_cv_stats(cv_results, metric_key):
+    """Compute mean ± std for a metric across all folds."""
+    values = []
+    for fold in range(N_FOLDS):
+        fold_key = f"fold_{fold}"
+        if fold_key in cv_results:
+            for method in ["baseline", "ssl_only", "ssl_kd", "upper_bound"]:
+                if method in cv_results[fold_key]:
+                    val = cv_results[fold_key][method].get(metric_key, float("nan"))
+                    if not np.isnan(val):
+                        values.append((method, val))
+    
+    # Group by method
+    method_values = {}
+    for method, val in values:
+        if method not in method_values:
+            method_values[method] = []
+        method_values[method].append(val)
+    
+    # Compute stats
+    stats = {}
+    for method, vals in method_values.items():
+        if len(vals) > 0:
+            stats[method] = {
+                "mean": np.mean(vals),
+                "std":  np.std(vals, ddof=1) if len(vals) > 1 else 0.0,
+                "n":    len(vals)
+            }
+    return stats
+
+dsc_stats  = compute_cv_stats(cv_results, "best_dsc")
+hd95_stats = compute_cv_stats(cv_results, "best_hd95")
+
+print("\n" + "=" * 70)
+print("  Heart segmentation — Task02 (3-fold cross-validation)")
+print("=" * 70)
+print(f"  {'Method':<30} {'DSC (mean ± std)':<20} {'HD95 (mean ± std)':<20}")
+print("-" * 70)
+
+method_labels = {
     "upper_bound": "Supervised UB (all labels)",
     "baseline":    "Baseline (random, 1 label)",
     "ssl_only":    "SSL only (SparK, 1 label)",
-    "ssl_kd":      "SSL + KD   (SparK, 1 label)",
+    "ssl_kd":      "SSL + KD (SparK, 1 label)",
 }
-for key, label in run_labels.items():
-    r = results.get(key, {})
-    dsc  = r.get("best_dsc",  float("nan"))
-    hd95 = r.get("best_hd95", float("nan"))
-    print(f"  {label:<30} {dsc:>8.4f} {hd95:>10.2f}")
 
-print("=" * 55)
+for method, label in method_labels.items():
+    dsc_info  = dsc_stats.get(method, {})
+    hd95_info = hd95_stats.get(method, {})
+    
+    if dsc_info:
+        dsc_str = f"{dsc_info['mean']:.3f} ± {dsc_info['std']:.3f}"
+    else:
+        dsc_str = "N/A"
+    
+    if hd95_info:
+        hd95_str = f"{hd95_info['mean']:.1f} ± {hd95_info['std']:.1f}"
+    else:
+        hd95_str = "N/A"
+    
+    print(f"  {label:<30} {dsc_str:<20} {hd95_str:<20}")
+
+print("=" * 70)
 print("  NOTE: nnU-Net reports 0.923 DSC on the official Decathlon")
 print("  test server (different split) — cited as context only.")
-print("=" * 55)
+print("=" * 70)
 
-# Compute gains
-if "baseline" in results and "ssl_only" in results:
-    gain_ssl = results["ssl_only"]["best_dsc"] - results["baseline"]["best_dsc"]
-    print(f"\n  SSL gain over baseline   :  {gain_ssl:+.4f} DSC")
-if "ssl_only" in results and "ssl_kd" in results:
-    gain_kd = results["ssl_kd"]["best_dsc"] - results["ssl_only"]["best_dsc"]
-    print(f"  KD  gain over SSL-only   :  {gain_kd:+.4f} DSC")
-if "upper_bound" in results and "ssl_kd" in results:
-    gap = results["upper_bound"]["best_dsc"] - results["ssl_kd"]["best_dsc"]
-    ub  = results["upper_bound"]["best_dsc"]
-    if ub > 0:
-        closed = (results["ssl_kd"]["best_dsc"] - results["baseline"]["best_dsc"]) / ub * 100
-        print(f"  Gap to upper bound       :  {gap:+.4f} DSC")
-        print(f"  SSL+KD closes {closed:.1f}% of gap to supervised UB")
+# Compute statistical comparisons
+if "baseline" in dsc_stats and "ssl_only" in dsc_stats:
+    baseline_mean = dsc_stats["baseline"]["mean"]
+    ssl_mean      = dsc_stats["ssl_only"]["mean"]
+    gain_ssl      = ssl_mean - baseline_mean
+    print(f"\n  SSL gain over baseline   :  {gain_ssl:+.3f} DSC")
+
+if "ssl_only" in dsc_stats and "ssl_kd" in dsc_stats:
+    ssl_mean = dsc_stats["ssl_only"]["mean"]
+    kd_mean  = dsc_stats["ssl_kd"]["mean"]
+    gain_kd  = kd_mean - ssl_mean
+    print(f"  KD  gain over SSL-only   :  {gain_kd:+.3f} DSC")
+
+if "upper_bound" in dsc_stats and "ssl_kd" in dsc_stats and "baseline" in dsc_stats:
+    ub_mean       = dsc_stats["upper_bound"]["mean"]
+    kd_mean       = dsc_stats["ssl_kd"]["mean"]
+    baseline_mean = dsc_stats["baseline"]["mean"]
+    
+    gap_to_ub = ub_mean - kd_mean
+    if ub_mean > baseline_mean:
+        pct_closed = (kd_mean - baseline_mean) / (ub_mean - baseline_mean) * 100
+        print(f"  Gap to upper bound       :  {gap_to_ub:+.3f} DSC")
+        print(f"  SSL+KD closes {pct_closed:.1f}% of gap to supervised UB")
 
 # %%
-# Save results JSON
-results_path = Path(OUT_DIR) / "ssl_kd_results.json"
-results_path.write_text(json.dumps(results, indent=2))
-print(f"\nResults saved to {results_path}")
+# Save CV results
+cv_results_path = Path(OUT_DIR) / "ssl_kd_cv_results.json"
+cv_results_path.write_text(json.dumps(cv_results, indent=2))
+print(f"\nCV results saved to {cv_results_path}")
+
+# Also save summary stats for the paper
+summary = {
+    "dsc_stats":  dsc_stats,
+    "hd95_stats": hd95_stats,
+    "n_folds":    N_FOLDS,
+    "seed":       SEED
+}
+summary_path = Path(OUT_DIR) / "ssl_kd_summary.json"
+summary_path.write_text(json.dumps(summary, indent=2))
+print(f"Summary stats saved to {summary_path}")
 
 if USE_WANDB:
-    save_checkpoint(results_path, "ssl-kd-results", "", "")
-    print("Results uploaded to WandB artifact: ssl-kd-results")
+    save_checkpoint(cv_results_path, "ssl-kd-cv-results", "", "")
+    save_checkpoint(summary_path, "ssl-kd-summary", "", "")
+    print("Results uploaded to WandB artifacts")
