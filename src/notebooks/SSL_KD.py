@@ -64,7 +64,7 @@ if ON_KAGGLE:
     subprocess.run(
         [sys.executable, "-m", "pip", "install",
          "monai[all]", "nibabel", "scipy", "scikit-image", "pyyaml",
-         "wandb", "--quiet"],
+         "wandb", "scikit-learn", "--quiet"],
         check=True
     )
     print("Dependencies installed.")
@@ -431,8 +431,6 @@ def finetune(run_name: str, model, train_loader, val_loader,
 # Reports mean ± std across folds for statistical validity.
 
 # %%
-from sklearn.model_selection import KFold
-
 # Get all heart files for CV splitting
 train_files, val_files = get_file_list(TASK_ROOTS, "heart")
 all_files = train_files + val_files  # 20 volumes total
@@ -550,7 +548,7 @@ for fold in range(N_FOLDS):
             teacher = build_model(pretrained=True)
             teacher.load_state_dict(
                 torch.load(cv_results[fold_key]["ssl_only"]["ckpt"], map_location=DEVICE))
-            teacher.eval()
+            teacher.eval()  # Ensure teacher is in eval mode after loading weights
             
             model_kd = build_model(pretrained=True)
             cv_results[fold_key]["ssl_kd"] = finetune(f"ssl_kd_fold{fold+1}", model_kd,
@@ -588,24 +586,19 @@ import numpy as np
 # Aggregate results across folds
 def compute_cv_stats(cv_results, metric_key):
     """Compute mean ± std for a metric across all folds."""
-    values = []
+    # Group by method first
+    method_values = {"baseline": [], "ssl_only": [], "ssl_kd": [], "upper_bound": []}
+    
     for fold in range(N_FOLDS):
         fold_key = f"fold_{fold}"
         if fold_key in cv_results:
-            for method in ["baseline", "ssl_only", "ssl_kd", "upper_bound"]:
+            for method in method_values.keys():
                 if method in cv_results[fold_key]:
                     val = cv_results[fold_key][method].get(metric_key, float("nan"))
                     if not np.isnan(val):
-                        values.append((method, val))
+                        method_values[method].append(val)
     
-    # Group by method
-    method_values = {}
-    for method, val in values:
-        if method not in method_values:
-            method_values[method] = []
-        method_values[method].append(val)
-    
-    # Compute stats
+    # Compute stats for each method
     stats = {}
     for method, vals in method_values.items():
         if len(vals) > 0:
