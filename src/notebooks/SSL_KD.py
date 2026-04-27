@@ -257,6 +257,10 @@ def evaluate(model, loader) -> dict:
     model.eval()
     ev = SegmentationEvaluator(num_classes=2)
     for batch in loader:
+        # Handle multiple samples from RandCropByPosNegLabeld
+        if isinstance(batch, list):
+            batch = batch[0]  # Take first sample if multiple generated
+            
         img  = batch["image"].to(DEVICE)
         pred = sliding_window_inference(
             img, (96, 96, 96), sw_batch_size=2, predictor=model, overlap=0.25)
@@ -350,6 +354,10 @@ def finetune(run_name: str, model, train_loader, val_loader,
         n_batches  = 0
 
         for batch in train_loader:
+            # Handle multiple samples from RandCropByPosNegLabeld
+            if isinstance(batch, list):
+                batch = batch[0]  # Take first sample if multiple generated
+            
             imgs   = batch["image"].to(DEVICE)
             labels = batch["label"].to(DEVICE)
             if labels.dim() == 4:
