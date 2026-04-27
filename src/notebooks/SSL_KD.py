@@ -225,8 +225,42 @@ from models.unet import build_unet, UNetWithEncoder
 from monai.losses import DiceCELoss
 from monai.inferers import sliding_window_inference
 from monai.data import CacheDataset, DataLoader
+from monai.transforms import (Compose, LoadImaged, EnsureChannelFirstd,
+                               Spacingd, Orientationd, NormalizeIntensityd,
+                               SpatialPadd, RandCropByPosNegLabeld,
+                               RandFlipd, RandGaussianNoised,
+                               RandScaleIntensityd, ToTensord)
 from data.datasets import get_loaders, get_file_list, get_transforms
 from sklearn.model_selection import KFold
+
+NUM_CROPS = 8  # patches extracted per training volume per epoch
+
+def get_multicrop_train_transform(num_crops: int = NUM_CROPS) -> Compose:
+    """Heart MRI train transform that extracts num_crops patches per volume.
+    RandCropByPosNegLabeld guarantees ~50% of crops land on heart voxels,
+    preventing the model from predicting all-background due to class imbalance.
+    """
+    return Compose([
+        LoadImaged(keys=["image", "label"]),
+        EnsureChannelFirstd(keys=["image", "label"]),
+        Spacingd(keys=["image", "label"],
+                 pixdim=(1.25, 1.25, 1.25), mode=("bilinear", "nearest")),
+        Orientationd(keys=["image", "label"], axcodes="RAS"),
+        NormalizeIntensityd(keys=["image"], nonzero=True),
+        SpatialPadd(keys=["image", "label"], spatial_size=(96, 96, 96)),
+        RandCropByPosNegLabeld(
+            keys=["image", "label"],
+            label_key="label",
+            spatial_size=(96, 96, 96),
+            pos=1, neg=1,          # equal chance of heart-centered vs background crop
+            num_samples=num_crops, # extract num_crops patches per volume
+            image_key="image",
+        ),
+        RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+        RandGaussianNoised(keys=["image"], prob=0.2, std=0.05),
+        RandScaleIntensityd(keys=["image"], factors=0.1, prob=0.5),
+        ToTensord(keys=["image", "label"]),
+    ])
 
 
 def build_model(pretrained: bool) -> UNetWithEncoder:
@@ -485,16 +519,20 @@ def get_fold_loaders(fold_idx, use_all_train=False):
     fold_val_files   = [all_files[i] for i in val_idx]
     
     if not use_all_train:
-        # Few-shot: use only 1 training volume
+        # Few-shot: 1 volume × NUM_CROPS crops = NUM_CROPS samples per epoch
         fold_train_files = fold_train_files[:1]
-    
+        train_transform  = get_multicrop_train_transform(NUM_CROPS)
+    else:
+        # Upper bound: all volumes, standard single-crop transform
+        train_transform  = get_transforms("heart", train=True)
+
     train_ds = CacheDataset(fold_train_files,
-                            transform=get_transforms("heart", train=True),
+                            transform=train_transform,
                             cache_rate=1.0)
     val_ds   = CacheDataset(fold_val_files,
                             transform=get_transforms("heart", train=False),
                             cache_rate=1.0)
-    
+
     return (DataLoader(train_ds, batch_size=TRAIN_CFG["batch_size"], shuffle=True,
                        num_workers=TRAIN_CFG["num_workers"], pin_memory=False),
             DataLoader(val_ds,   batch_size=1, shuffle=False,
