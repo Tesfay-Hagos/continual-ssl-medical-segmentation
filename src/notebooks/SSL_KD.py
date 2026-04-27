@@ -519,9 +519,12 @@ def get_fold_loaders(fold_idx, use_all_train=False):
     fold_val_files   = [all_files[i] for i in val_idx]
     
     if not use_all_train:
-        # Few-shot: 1 volume × NUM_CROPS crops = NUM_CROPS samples per epoch
-        fold_train_files = fold_train_files[:1]
-        train_transform  = get_multicrop_train_transform(NUM_CROPS)
+        # Few-shot: repeat the single volume NUM_CROPS times so DataLoader
+        # sees NUM_CROPS independent samples, each getting a different random
+        # crop. CacheDataset caches the 1 unique file once and serves it
+        # NUM_CROPS times with different augmentations each epoch.
+        fold_train_files = fold_train_files[:1] * NUM_CROPS
+        train_transform  = get_transforms("heart", train=True)
     else:
         # Upper bound: all volumes, standard single-crop transform
         train_transform  = get_transforms("heart", train=True)
