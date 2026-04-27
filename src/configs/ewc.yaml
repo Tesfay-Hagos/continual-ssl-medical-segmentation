@@ -9,9 +9,9 @@ task_order:        ["liver", "heart"]
 channels:          [32, 64, 128, 256, 512]
 strides:           [2, 2, 2, 2]
 
-# EWC — lambda scaled up from 1000 to protect richer pretrained features
-ewc_lambda:        5000.0
-fisher_batches:    50
+# EWC — lambda scaled up significantly to prevent catastrophic forgetting
+ewc_lambda:        50000.0
+fisher_batches:    100
 
 # Training per task
 epochs_per_task:   20

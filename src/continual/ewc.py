@@ -30,7 +30,7 @@ class EWC:
         loss = criterion(pred, target) + ewc.penalty(model)
     """
 
-    def __init__(self, model: nn.Module, lambda_: float = 1000.0):
+    def __init__(self, model: nn.Module, lambda_: float = 50000.0):
         self.lambda_ = lambda_
         # List of (means, fishers) dicts — one entry per completed task
         self._task_params: list = []
@@ -52,11 +52,12 @@ class EWC:
             model:       trained model at end of task t
             dataloader:  validation loader for task t (used to estimate Fisher)
             device:      compute device
-            criterion:   loss used for Fisher estimation (default: CrossEntropy)
+            criterion:   loss used for Fisher estimation (default: DiceCELoss)
             num_batches: how many batches to use for Fisher estimation
         """
         if criterion is None:
-            criterion = nn.CrossEntropyLoss()
+            from monai.losses import DiceCELoss
+            criterion = DiceCELoss(to_onehot_y=True, softmax=True)
 
         model.eval()
         means   = self._copy_params(model)
@@ -66,8 +67,18 @@ class EWC:
         for i, batch in enumerate(dataloader):
             if i >= num_batches:
                 break
+            
+            # Handle multiple samples from RandCropByPosNegLabeld
+            if isinstance(batch, list):
+                batch = batch[0]
+                
             imgs   = batch["image"].to(device)
-            labels = batch["label"].long().squeeze(1).to(device)
+            labels = batch["label"].to(device)
+            
+            # Ensure correct label format for DiceCELoss
+            if labels.dim() == 4:
+                labels = labels.unsqueeze(1)
+            labels = labels.long()
 
             model.zero_grad()
             output = model(imgs)
