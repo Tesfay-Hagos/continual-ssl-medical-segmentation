@@ -368,14 +368,22 @@ def finetune(run_name: str, model, train_loader, val_loader,
             with torch.amp.autocast(device_type=DEVICE.type):
                 preds = model(imgs)
                 loss  = criterion(preds, labels)
+                
+                # Debug: Check data and predictions on first batch
+                if epoch == 0 and n_batches == 0:
+                    print(f"  Debug - Image shape: {imgs.shape}, range: [{imgs.min():.3f}, {imgs.max():.3f}]")
+                    print(f"  Debug - Label shape: {labels.shape}, unique values: {torch.unique(labels)}")
+                    print(f"  Debug - Pred shape: {preds.shape}, range: [{preds.min():.3f}, {preds.max():.3f}]")
+                    print(f"  Debug - Label coverage: {(labels > 0).float().mean():.4f}")
+                    print(f"  Debug - Loss value: {loss.item():.6f}")
 
             if teacher is not None:
-                with torch.inference_mode():
+                with torch.no_grad():  # Changed from inference_mode to no_grad
                     t_soft = F.softmax(teacher(imgs).float() / t_kd, dim=1)
                 s_log    = F.log_softmax(preds.float() / t_kd, dim=1)
                 # Per-voxel scaling: same normalization as DiceCELoss
                 n_voxels = imgs.shape[2] * imgs.shape[3] * imgs.shape[4]  # D*H*W
-                kd_loss  = F.kl_div(s_log, t_soft, reduction="sum") / (imgs.shape[0] * n_voxels)
+                kd_loss  = F.kl_div(s_log, t_soft.detach(), reduction="sum") / (imgs.shape[0] * n_voxels)
                 kd_loss  = kd_loss * (t_kd ** 2)
                 loss     = loss + alpha * kd_loss
 
