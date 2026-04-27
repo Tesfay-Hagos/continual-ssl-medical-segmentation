@@ -218,7 +218,7 @@ def _ct_transforms(task_name: str, train: bool) -> Compose:
             SpatialPadd(keys=keys, spatial_size=(96, 96, 96)),
             RandCropByPosNegLabeld(keys=keys, label_key="label",
                                    spatial_size=(96, 96, 96),
-                                   pos=1, neg=1, num_samples=4,
+                                   pos=1, neg=1, num_samples=8,
                                    allow_smaller=True),
             RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
             RandRotate90d(keys=keys, prob=0.5, max_k=3),
@@ -248,7 +248,7 @@ def _mri_transforms(task_name: str, train: bool) -> Compose:
             SpatialPadd(keys=keys, spatial_size=(96, 96, 96)),
             RandCropByPosNegLabeld(keys=keys, label_key="label",
                                    spatial_size=(96, 96, 96),
-                                   pos=1, neg=1, num_samples=4,
+                                   pos=1, neg=1, num_samples=8,
                                    allow_smaller=True),
             RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
             # MRI has high inter-scanner variability — stronger intensity aug
