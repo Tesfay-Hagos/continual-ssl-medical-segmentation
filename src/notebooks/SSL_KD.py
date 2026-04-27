@@ -224,8 +224,7 @@ TRAIN_CFG = {
 from models.unet import build_unet, UNetWithEncoder
 from monai.losses import DiceCELoss
 from monai.inferers import sliding_window_inference
-from monai.data import CacheDataset
-from torch.utils.data import DataLoader
+from monai.data import CacheDataset, DataLoader
 from data.datasets import get_loaders, get_file_list, get_transforms
 from sklearn.model_selection import KFold
 
