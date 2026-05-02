@@ -139,28 +139,32 @@ import yaml
 from pathlib import Path
 from utils.storage import restore_checkpoint, save_checkpoint
 
+_BEST_CKPT      = "best.pth"
+_LATEST_CKPT    = "latest.pth"
+_CV_RESULTS_FILE = "ssl_kd_cv_results.json"
+
 PRETRAIN_DIR  = Path(os.path.join(OUT_DIR, "pretrain"))
-PRETRAIN_CKPT = PRETRAIN_DIR / "best.pth"
+PRETRAIN_CKPT = PRETRAIN_DIR / _BEST_CKPT
 PRETRAIN_DONE = PRETRAIN_DIR / "pretrain_done.json"
 PRETRAIN_DIR.mkdir(parents=True, exist_ok=True)
 
 # Try to restore completion marker + encoder from WandB
 restore_checkpoint("pretrain_done.json", PRETRAIN_DIR,
                    "pretrain-done", "cssl-medical", "", "")
-restore_checkpoint("best.pth", PRETRAIN_DIR,
+restore_checkpoint(_BEST_CKPT, PRETRAIN_DIR,
                    "pretrain-encoder", "cssl-medical", "", "")
 
 # Fallback: extract encoder weights from full training checkpoint
 if not PRETRAIN_CKPT.exists():
-    restore_checkpoint("latest.pth", PRETRAIN_DIR,
+    restore_checkpoint(_LATEST_CKPT, PRETRAIN_DIR,
                        "pretrain-checkpoint", "cssl-medical", "", "")
-    _latest = PRETRAIN_DIR / "latest.pth"
+    _latest = PRETRAIN_DIR / _LATEST_CKPT
     if _latest.exists():
         _full = torch.load(_latest, map_location="cpu")["model"]
         _enc  = {k[len("encoder."):]: v
                  for k, v in _full.items() if k.startswith("encoder.")}
         torch.save(_enc, PRETRAIN_CKPT)
-        print("Extracted encoder weights from latest.pth → best.pth")
+        print(f"Extracted encoder weights from {_LATEST_CKPT} → {_BEST_CKPT}")
 
 if PRETRAIN_DONE.exists():
     _info = json.loads(PRETRAIN_DONE.read_text())
@@ -332,44 +336,71 @@ import copy
 import torch.nn.functional as F
 
 
+def _finetune_step(model, batch, criterion, teacher, optimizer, scaler,
+                   alpha, t_kd, debug=False):
+    """Run one gradient step; return loss value or None if non-finite."""
+    if isinstance(batch, list):
+        batch = batch[0]
+    imgs   = batch["image"].to(DEVICE)
+    labels = batch["label"].to(DEVICE)
+    if labels.dim() == 4:
+        labels = labels.unsqueeze(1)
+    labels = labels.long()
+
+    optimizer.zero_grad()
+    with torch.amp.autocast(device_type=DEVICE.type):
+        preds = model(imgs)
+        loss  = criterion(preds, labels)
+        if debug:
+            print(f"  Debug - Image shape: {imgs.shape}, range: [{imgs.min():.3f}, {imgs.max():.3f}]")
+            print(f"  Debug - Label shape: {labels.shape}, unique values: {torch.unique(labels, dim=None)}")
+            print(f"  Debug - Pred shape: {preds.shape}, range: [{preds.min():.3f}, {preds.max():.3f}]")
+            print(f"  Debug - Label coverage: {(labels > 0).float().mean():.4f}")
+            print(f"  Debug - Loss value: {loss.item():.6f}")
+
+    if teacher is not None:
+        with torch.no_grad():
+            t_soft = F.softmax(teacher(imgs).float() / t_kd, dim=1)
+        s_log    = F.log_softmax(preds.float() / t_kd, dim=1)
+        n_voxels = imgs.shape[2] * imgs.shape[3] * imgs.shape[4]
+        kd_loss  = F.kl_div(s_log, t_soft.detach(), reduction="sum") / (imgs.shape[0] * n_voxels)
+        loss     = loss + alpha * kd_loss * (t_kd ** 2)
+
+    if not torch.isfinite(loss):
+        optimizer.zero_grad()
+        return None
+
+    scaler.scale(loss).backward()
+    scaler.unscale_(optimizer)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    scaler.step(optimizer)
+    scaler.update()
+    return loss.item()
+
+
 def finetune(run_name: str, model, train_loader, val_loader,
              teacher=None) -> dict:
-    """
-    Fine-tune model on heart.
-
-    Args:
-        run_name:     WandB run name and checkpoint subfolder
-        model:        UNetWithEncoder to train
-        train_loader: training DataLoader
-        val_loader:   validation DataLoader
-        teacher:      frozen teacher model for KD loss (None = no KD)
-
-    Returns dict with best DSC, HD95 and checkpoint path.
-    """
+    """Fine-tune model on heart. Returns dict with best DSC, HD95, checkpoint path."""
     ckpt_dir = Path(OUT_DIR) / run_name
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    criterion = DiceCELoss(to_onehot_y=True, softmax=True)
-    optimizer = torch.optim.AdamW(model.parameters(),
-                                  lr=TRAIN_CFG["lr"],
-                                  weight_decay=TRAIN_CFG["weight_decay"])
-    scheduler  = make_scheduler(optimizer, TRAIN_CFG["epochs"],
-                                 TRAIN_CFG["warmup_epochs"])
-    scaler     = torch.amp.GradScaler(DEVICE.type,
-                                       enabled=(DEVICE.type == "cuda"))
-
-    best_dsc   = 0.0
-    best_hd95  = float("inf")
-    trigger    = 0
-    patience   = TRAIN_CFG["patience"]
-    alpha      = TRAIN_CFG["kd_alpha"]
-    t_kd       = TRAIN_CFG["kd_temperature"]
+    criterion   = DiceCELoss(to_onehot_y=True, softmax=True)
+    optimizer   = torch.optim.AdamW(model.parameters(),
+                                    lr=TRAIN_CFG["lr"],
+                                    weight_decay=TRAIN_CFG["weight_decay"])
+    scheduler   = make_scheduler(optimizer, TRAIN_CFG["epochs"], TRAIN_CFG["warmup_epochs"])
+    scaler      = torch.amp.GradScaler(DEVICE.type, enabled=(DEVICE.type == "cuda"))
+    patience    = TRAIN_CFG["patience"]
+    alpha       = TRAIN_CFG["kd_alpha"]
+    t_kd        = TRAIN_CFG["kd_temperature"]
+    best_dsc    = 0.0
+    best_hd95   = float("inf")
+    trigger     = 0
     start_epoch = 0
 
-    # Resume from latest.pth if interrupted
-    resume_ckpt = ckpt_dir / "latest.pth"
+    resume_ckpt = ckpt_dir / _LATEST_CKPT
     if resume_ckpt.exists():
-        state = torch.load(resume_ckpt, map_location=DEVICE)
+        state       = torch.load(resume_ckpt, map_location=DEVICE)
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         scheduler.load_state_dict(state["scheduler"])
@@ -387,75 +418,28 @@ def finetune(run_name: str, model, train_loader, val_loader,
 
     for epoch in range(start_epoch, TRAIN_CFG["epochs"]):
         model.train()
-        epoch_loss = 0.0
-        n_batches  = 0
-
+        epoch_loss, n_batches = 0.0, 0
         for batch in train_loader:
-            # Handle multiple samples from RandCropByPosNegLabeld
-            if isinstance(batch, list):
-                batch = batch[0]  # Take first sample if multiple generated
-            
-            imgs   = batch["image"].to(DEVICE)
-            labels = batch["label"].to(DEVICE)
-            if labels.dim() == 4:
-                labels = labels.unsqueeze(1)
-            labels = labels.long()
-
-            optimizer.zero_grad()
-            with torch.amp.autocast(device_type=DEVICE.type):
-                preds = model(imgs)
-                loss  = criterion(preds, labels)
-                
-                # Debug: Check data and predictions on first batch
-                if epoch == 0 and n_batches == 0:
-                    print(f"  Debug - Image shape: {imgs.shape}, range: [{imgs.min():.3f}, {imgs.max():.3f}]")
-                    print(f"  Debug - Label shape: {labels.shape}, unique values: {torch.unique(labels)}")
-                    print(f"  Debug - Pred shape: {preds.shape}, range: [{preds.min():.3f}, {preds.max():.3f}]")
-                    print(f"  Debug - Label coverage: {(labels > 0).float().mean():.4f}")
-                    print(f"  Debug - Loss value: {loss.item():.6f}")
-
-            if teacher is not None:
-                with torch.no_grad():  # Changed from inference_mode to no_grad
-                    t_soft = F.softmax(teacher(imgs).float() / t_kd, dim=1)
-                s_log    = F.log_softmax(preds.float() / t_kd, dim=1)
-                # Per-voxel scaling: same normalization as DiceCELoss
-                n_voxels = imgs.shape[2] * imgs.shape[3] * imgs.shape[4]  # D*H*W
-                kd_loss  = F.kl_div(s_log, t_soft.detach(), reduction="sum") / (imgs.shape[0] * n_voxels)
-                kd_loss  = kd_loss * (t_kd ** 2)
-                loss     = loss + alpha * kd_loss
-
-            if not torch.isfinite(loss):
-                optimizer.zero_grad()
-                continue
-
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            scaler.step(optimizer)
-            scaler.update()
-            epoch_loss += loss.item()
-            n_batches  += 1
+            step_loss = _finetune_step(model, batch, criterion, teacher, optimizer, scaler,
+                                       alpha, t_kd, debug=(epoch == 0 and n_batches == 0))
+            if step_loss is not None:
+                epoch_loss += step_loss
+                n_batches  += 1
 
         scheduler.step()
         avg_loss = epoch_loss / max(n_batches, 1)
         metrics  = evaluate(model, val_loader)
-        dsc      = metrics["dice"]
-        hd95     = metrics["hd95"]
-        lr_now   = scheduler.get_last_lr()[0]
+        dsc, hd95 = metrics["dice"], metrics["hd95"]
 
         print(f"  [{run_name}] Epoch {epoch+1:>3}/{TRAIN_CFG['epochs']} | "
               f"loss={avg_loss:.4f} | DSC={dsc:.4f} | HD95={hd95:.1f} | "
-              f"best={best_dsc:.4f} | lr={lr_now:.2e}")
-
-        log_wandb({f"{run_name}/loss": avg_loss,
-                   f"{run_name}/dsc":  dsc,
-                   f"{run_name}/hd95": hd95,
-                   f"{run_name}/epoch": epoch + 1})
+              f"best={best_dsc:.4f} | lr={scheduler.get_last_lr()[0]:.2e}")
+        log_wandb({f"{run_name}/loss": avg_loss, f"{run_name}/dsc": dsc,
+                   f"{run_name}/hd95": hd95, f"{run_name}/epoch": epoch + 1})
 
         if dsc >= best_dsc:
-            best_dsc  = dsc
-            best_hd95 = hd95
-            torch.save(model.state_dict(), ckpt_dir / "best.pth")
+            best_dsc, best_hd95 = dsc, hd95
+            torch.save(model.state_dict(), ckpt_dir / _BEST_CKPT)
             trigger = 0
         else:
             trigger += 1
@@ -463,20 +447,15 @@ def finetune(run_name: str, model, train_loader, val_loader,
                 print(f"  Early stopping at epoch {epoch+1}.")
                 break
 
-        # Save resume checkpoint every epoch
-        torch.save({"model":     model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict(),
-                    "epoch":     epoch,
-                    "best_dsc":  best_dsc,
-                    "best_hd95": best_hd95,
-                    "trigger":   trigger}, resume_ckpt)
+        torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(), "epoch": epoch,
+                    "best_dsc": best_dsc, "best_hd95": best_hd95,
+                    "trigger": trigger}, resume_ckpt)
 
-    log_wandb({f"{run_name}/best_dsc": best_dsc,
-               f"{run_name}/best_hd95": best_hd95})
+    log_wandb({f"{run_name}/best_dsc": best_dsc, f"{run_name}/best_hd95": best_hd95})
     print(f"  [{run_name}] Done. Best DSC={best_dsc:.4f}  HD95={best_hd95:.1f}")
     return {"run": run_name, "best_dsc": best_dsc, "best_hd95": best_hd95,
-            "ckpt": str(ckpt_dir / "best.pth")}
+            "ckpt": str(ckpt_dir / _BEST_CKPT)}
 
 # %% [markdown]
 # ## 5 — Cross-validation setup and experiments
@@ -499,11 +478,11 @@ for fold, (train_idx, val_idx) in enumerate(fold_splits):
     print(f"  Fold {fold+1}: {len(train_idx)} train, {len(val_idx)} val")
 
 # Restore CV results from previous WandB run before checking disk
-restore_checkpoint("ssl_kd_cv_results.json", Path(OUT_DIR),
+restore_checkpoint(_CV_RESULTS_FILE, Path(OUT_DIR),
                    "ssl-kd-cv-results", WANDB_PROJECT, "", "")
 
 # Restore CV results from previous run
-_cv_results_path = Path(OUT_DIR) / "ssl_kd_cv_results.json"
+_cv_results_path = Path(OUT_DIR) / _CV_RESULTS_FILE
 cv_results = {}
 if _cv_results_path.exists():
     cv_results = json.loads(_cv_results_path.read_text())
@@ -513,6 +492,8 @@ def _save_cv_results():
     _cv_results_path.write_text(json.dumps(cv_results, indent=2))
     if USE_WANDB and wandb.run is not None:
         save_checkpoint(_cv_results_path, "ssl-kd-cv-results", "", "")
+        print(f"  💾 cv_results uploaded to WandB (entity={wandb.run.entity}, "
+              f"project={wandb.run.project}, folds={list(cv_results.keys())})")
 
 def get_fold_loaders(fold_idx, use_all_train=False):
     """Get train/val loaders for a specific fold.
@@ -653,28 +634,17 @@ import numpy as np
 # Aggregate results across folds
 def compute_cv_stats(cv_results, metric_key):
     """Compute mean ± std for a metric across all folds."""
-    # Group by method first
-    method_values = {"baseline": [], "ssl_only": [], "ssl_kd": [], "upper_bound": []}
-    
+    buckets = {"baseline": [], "ssl_only": [], "ssl_kd": [], "upper_bound": []}
     for fold in range(N_FOLDS):
-        fold_key = f"fold_{fold}"
-        if fold_key in cv_results:
-            for method in method_values.keys():
-                if method in cv_results[fold_key]:
-                    val = cv_results[fold_key][method].get(metric_key, float("nan"))
-                    if not np.isnan(val):
-                        method_values[method].append(val)
-    
-    # Compute stats for each method
-    stats = {}
-    for method, vals in method_values.items():
-        if len(vals) > 0:
-            stats[method] = {
-                "mean": np.mean(vals),
-                "std":  np.std(vals, ddof=1) if len(vals) > 1 else 0.0,
-                "n":    len(vals)
-            }
-    return stats
+        fold_data = cv_results.get(f"fold_{fold}", {})
+        for method, vals in buckets.items():
+            v = fold_data.get(method, {}).get(metric_key, float("nan"))
+            if not np.isnan(v):
+                vals.append(v)
+    return {
+        m: {"mean": np.mean(vs), "std": np.std(vs, ddof=1) if len(vs) > 1 else 0.0, "n": len(vs)}
+        for m, vs in buckets.items() if vs
+    }
 
 dsc_stats  = compute_cv_stats(cv_results, "best_dsc")
 hd95_stats = compute_cv_stats(cv_results, "best_hd95")

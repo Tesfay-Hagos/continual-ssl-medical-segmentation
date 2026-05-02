@@ -87,10 +87,15 @@ def wandb_download(artifact_name: str, filename: str,
         try:
             api = wandb.Api()
             art = api.artifact(path)
-            art.get_path(filename).download(root=str(dest_dir))
+            # get_entry is the current API; get_path is deprecated in WandB >= 0.16
+            try:
+                art.get_entry(filename).download(root=str(dest_dir))
+            except AttributeError:
+                art.get_path(filename).download(root=str(dest_dir))
             print(f"  ✅ Restored {filename} from WandB ({artifact_name})")
             return True
-        except Exception:
+        except Exception as _e:
+            print(f"  ℹ️  WandB restore attempt failed for {path}: {_e}")
             continue
     print(f"  ℹ️  WandB restore skipped — artifact not found ({artifact_name})")
     return False
