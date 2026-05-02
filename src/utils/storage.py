@@ -50,6 +50,27 @@ def wandb_upload(local_path: Path, artifact_name: str):
         print(f"  ⚠️  WandB upload failed ({artifact_name}): {e}")
 
 
+_WANDB_ENTITY: str = ""  # set by set_wandb_entity() after login
+
+
+def set_wandb_entity(entity: str):
+    """Call this once after wandb.login() to cache the correct entity."""
+    global _WANDB_ENTITY
+    _WANDB_ENTITY = entity
+
+
+def _resolve_entity() -> str:
+    """Return the best available entity, preferring the cached value."""
+    if _WANDB_ENTITY:
+        return _WANDB_ENTITY
+    if wandb.run is not None:
+        return wandb.run.entity
+    try:
+        return wandb.Api().default_entity or ""
+    except Exception:
+        return ""
+
+
 def wandb_download(artifact_name: str, filename: str,
                    dest_dir: Path, project: str) -> bool:
     """Download latest version of a WandB artifact. Returns True on success."""
@@ -57,18 +78,22 @@ def wandb_download(artifact_name: str, filename: str,
         return False
     if (dest_dir / filename).exists():
         return False
-    try:
-        api    = wandb.Api()
-        entity = (wandb.run.entity if wandb.run is not None
-                  else api.default_entity)
-        prefix = f"{entity}/{project}" if entity else project
-        art  = api.artifact(f"{prefix}/{artifact_name}:latest")
-        art.get_path(filename).download(root=str(dest_dir))
-        print(f"  ✅ Restored {filename} from WandB ({artifact_name})")
-        return True
-    except Exception as e:
-        print(f"  ℹ️  WandB restore failed ({artifact_name}): {e}")
-        return False
+    entity = _resolve_entity()
+    prefix = f"{entity}/{project}" if entity else project
+    # Try with entity prefix first, then bare project name as fallback
+    for path in ([f"{prefix}/{artifact_name}:latest",
+                  f"{project}/{artifact_name}:latest"] if entity else
+                 [f"{project}/{artifact_name}:latest"]):
+        try:
+            api = wandb.Api()
+            art = api.artifact(path)
+            art.get_path(filename).download(root=str(dest_dir))
+            print(f"  ✅ Restored {filename} from WandB ({artifact_name})")
+            return True
+        except Exception:
+            continue
+    print(f"  ℹ️  WandB restore skipped — artifact not found ({artifact_name})")
+    return False
 
 
 # ── Google Drive ──────────────────────────────────────────────────────────────

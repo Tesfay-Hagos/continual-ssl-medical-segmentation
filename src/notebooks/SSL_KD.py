@@ -90,6 +90,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 # %%
 import wandb
+from utils.storage import set_wandb_entity
 
 WANDB_PROJECT = "ssl-kd-heart"
 try:
@@ -100,7 +101,9 @@ try:
     else:
         wandb.login()
     USE_WANDB = True
-    print(f"WandB logged in. Project: {WANDB_PROJECT}")
+    _wandb_entity = wandb.Api().default_entity or ""
+    set_wandb_entity(_wandb_entity)
+    print(f"WandB logged in. Project: {WANDB_PROJECT}  Entity: {_wandb_entity}")
 except Exception as e:
     USE_WANDB = False
     print(f"WandB login failed ({e}) — running without logging.")
@@ -495,6 +498,10 @@ print(f"3-fold CV on {len(all_files)} heart volumes:")
 for fold, (train_idx, val_idx) in enumerate(fold_splits):
     print(f"  Fold {fold+1}: {len(train_idx)} train, {len(val_idx)} val")
 
+# Restore CV results from previous WandB run before checking disk
+restore_checkpoint("ssl_kd_cv_results.json", Path(OUT_DIR),
+                   "ssl-kd-cv-results", WANDB_PROJECT, "", "")
+
 # Restore CV results from previous run
 _cv_results_path = Path(OUT_DIR) / "ssl_kd_cv_results.json"
 cv_results = {}
@@ -504,6 +511,8 @@ if _cv_results_path.exists():
 
 def _save_cv_results():
     _cv_results_path.write_text(json.dumps(cv_results, indent=2))
+    if USE_WANDB and wandb.run is not None:
+        save_checkpoint(_cv_results_path, "ssl-kd-cv-results", "", "")
 
 def get_fold_loaders(fold_idx, use_all_train=False):
     """Get train/val loaders for a specific fold.
