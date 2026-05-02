@@ -488,42 +488,9 @@ cv_results = {}
 # regardless of WandB's internal storage format (parquet, etc.).
 _CV_METHODS = ["baseline", "ssl_only", "ssl_kd", "upper_bound"]
 
-def _restore_cv_from_wandb():
-    """Rebuild cv_results by scanning finished WandB runs in this project."""
-    if not USE_WANDB:
-        return
-    try:
-        from utils.storage import _resolve_entity
-        entity = _resolve_entity()
-        path   = f"{entity}/{WANDB_PROJECT}" if entity else WANDB_PROJECT
-        api    = wandb.Api()
-        print(f"  Querying WandB runs at {path} ...")
-        runs   = {r.name: r for r in api.runs(path) if r.state == "finished"}
-        print(f"  Found {len(runs)} finished runs: {sorted(runs)}")
-        for fold_idx in range(N_FOLDS):
-            fold_key = f"fold_{fold_idx}"
-            for method in _CV_METHODS:
-                if cv_results.get(fold_key, {}).get(method):
-                    continue
-                run_name = f"{method}_fold{fold_idx + 1}"
-                run = runs.get(run_name)
-                if run is None:
-                    continue
-                best_dsc  = run.summary.get(f"{run_name}/best_dsc")
-                best_hd95 = run.summary.get(f"{run_name}/best_hd95")
-                if best_dsc is None:
-                    continue
-                cv_results.setdefault(fold_key, {})[method] = {
-                    "run":      run_name,
-                    "best_dsc":  float(best_dsc),
-                    "best_hd95": float(best_hd95) if best_hd95 is not None else float("inf"),
-                    "ckpt":      str(Path(OUT_DIR) / run_name / _BEST_CKPT),
-                }
-                print(f"  ✅ {run_name}: DSC={best_dsc:.4f}")
-    except Exception as e:
-        print(f"  ⚠️  WandB run query failed: {e}")
-
-_restore_cv_from_wandb()
+from utils.cv_restore import restore_cv_from_wandb as _restore_cv_from_wandb
+if USE_WANDB:
+    _restore_cv_from_wandb(cv_results, WANDB_PROJECT, N_FOLDS, _BEST_CKPT, OUT_DIR)
 
 # Also try JSON artifact as secondary fallback (covers runs logged before this change)
 if not cv_results:
