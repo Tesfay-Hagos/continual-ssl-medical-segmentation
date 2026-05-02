@@ -480,23 +480,71 @@ print(f"3-fold CV on {len(all_files)} heart volumes:")
 for fold, (train_idx, val_idx) in enumerate(fold_splits):
     print(f"  Fold {fold+1}: {len(train_idx)} train, {len(val_idx)} val")
 
-# Restore CV results from previous WandB run before checking disk
-restore_checkpoint(_CV_RESULTS_FILE, Path(OUT_DIR),
-                   "ssl-kd-cv-results", WANDB_PROJECT, "", "")
-
-# Restore CV results from previous run
 _cv_results_path = Path(OUT_DIR) / _CV_RESULTS_FILE
 cv_results = {}
-if _cv_results_path.exists():
-    cv_results = json.loads(_cv_results_path.read_text())
-    print(f"Restored CV results: {list(cv_results.keys())}")
+
+# Primary restore: query WandB API directly for each expected run.
+# This is more reliable than downloading a JSON artifact because it works
+# regardless of WandB's internal storage format (parquet, etc.).
+_CV_METHODS = ["baseline", "ssl_only", "ssl_kd", "upper_bound"]
+
+def _restore_cv_from_wandb():
+    """Rebuild cv_results by scanning finished WandB runs in this project."""
+    if not USE_WANDB:
+        return
+    try:
+        from utils.storage import _resolve_entity
+        entity = _resolve_entity()
+        path   = f"{entity}/{WANDB_PROJECT}" if entity else WANDB_PROJECT
+        api    = wandb.Api()
+        print(f"  Querying WandB runs at {path} ...")
+        runs   = {r.name: r for r in api.runs(path) if r.state == "finished"}
+        print(f"  Found {len(runs)} finished runs: {sorted(runs)}")
+        for fold_idx in range(N_FOLDS):
+            fold_key = f"fold_{fold_idx}"
+            for method in _CV_METHODS:
+                if cv_results.get(fold_key, {}).get(method):
+                    continue
+                run_name = f"{method}_fold{fold_idx + 1}"
+                run = runs.get(run_name)
+                if run is None:
+                    continue
+                best_dsc  = run.summary.get(f"{run_name}/best_dsc")
+                best_hd95 = run.summary.get(f"{run_name}/best_hd95")
+                if best_dsc is None:
+                    continue
+                cv_results.setdefault(fold_key, {})[method] = {
+                    "run":      run_name,
+                    "best_dsc":  float(best_dsc),
+                    "best_hd95": float(best_hd95) if best_hd95 is not None else float("inf"),
+                    "ckpt":      str(Path(OUT_DIR) / run_name / _BEST_CKPT),
+                }
+                print(f"  ✅ {run_name}: DSC={best_dsc:.4f}")
+    except Exception as e:
+        print(f"  ⚠️  WandB run query failed: {e}")
+
+_restore_cv_from_wandb()
+
+# Also try JSON artifact as secondary fallback (covers runs logged before this change)
+if not cv_results:
+    restore_checkpoint(_CV_RESULTS_FILE, Path(OUT_DIR),
+                       "ssl-kd-cv-results", WANDB_PROJECT, "", "")
+    if _cv_results_path.exists():
+        cv_results.update(json.loads(_cv_results_path.read_text()))
+
+if cv_results:
+    print(f"CV results loaded — folds: {sorted(cv_results)}")
+    for fk, fv in sorted(cv_results.items()):
+        print(f"  {fk}: {sorted(fv)}")
+else:
+    print("No previous CV results found — starting fresh.")
+
 
 def _save_cv_results():
     _cv_results_path.write_text(json.dumps(cv_results, indent=2))
     if USE_WANDB and wandb.run is not None:
         save_checkpoint(_cv_results_path, "ssl-kd-cv-results", "", "")
-        print(f"  💾 cv_results uploaded to WandB (entity={wandb.run.entity}, "
-              f"project={wandb.run.project}, folds={list(cv_results.keys())})")
+        print(f"  💾 cv_results saved (folds={sorted(cv_results)})")
 
 def get_fold_loaders(fold_idx, use_all_train=False):
     """Get train/val loaders for a specific fold.
