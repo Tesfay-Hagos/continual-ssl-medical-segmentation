@@ -129,10 +129,10 @@ else:
 # ## 1 — Dataset verification
 
 # %%
-if not verify_datasets(TASK_ROOTS):
+if not verify_datasets(TASK_ROOTS, required=list(set(TASK_ORDER))):
     raise RuntimeError(
         "One or more datasets are missing. "
-        "Add all three Kaggle dataset inputs (heart, liver, pancreas)."
+        "Add heart and liver Kaggle dataset inputs."
     )
 print("Dataset OK — all three tasks found.")
 
@@ -280,11 +280,22 @@ lwf_base.update({
     "gdrive_credentials": GDRIVE_CREDENTIALS,
 })
 
-# LwF — skipped for now, run after EWC+SSL smoke-test passes
-# lwf_no_ssl = {**lwf_base, "use_pretrained": False,
-#               "wandb_run": "lwf_no_ssl",
-#               "output_dir": os.path.join(OUT_DIR, "lwf_no_ssl")}
-# run_continual(lwf_no_ssl)
+# 5a — LwF, no pretraining
+lwf_no_ssl = {**lwf_base,
+              "use_pretrained": False,
+              "wandb_run":      "lwf_no_ssl",
+              "output_dir":     os.path.join(OUT_DIR, "lwf_no_ssl")}
+print("=== LwF — random init ===")
+run_continual(lwf_no_ssl)
+
+# 5b — LwF, with SparK pretraining
+lwf_ssl = {**lwf_base,
+           "use_pretrained":  True,
+           "pretrained_ckpt": PRETRAIN_CKPT,
+           "wandb_run":       "lwf_ssl",
+           "output_dir":      os.path.join(OUT_DIR, "lwf_ssl")}
+print("=== LwF — SparK pretrained ===")
+run_continual(lwf_ssl)
 
 # %% [markdown]
 # ## 6 — Results
@@ -298,6 +309,8 @@ from evaluation.metrics import (backward_transfer, forgetting_measure,
 EXPERIMENTS = {
     "EWC (no SSL)":         "ewc_no_ssl",
     "EWC + SparK":          "ewc_ssl",
+    "LwF (no SSL)":         "lwf_no_ssl",
+    "LwF + SparK":          "lwf_ssl",
 }
 TASKS = TASK_ORDER
 
@@ -326,7 +339,7 @@ print("\n=== RQ3: SparK pretraining vs no pretraining (EWC) ===\n")
 print(f"{'':12} {'No-SSL BWT':>12} {'SSL BWT':>10} {'Delta':>10}")
 print("-" * 48)
 
-for strategy in ["ewc"]:
+for strategy in ["ewc", "lwf"]:
     bwt_vals = {}
     for tag, folder in [("no_ssl", f"{strategy}_no_ssl"),
                         ("ssl",    f"{strategy}_ssl")]:

@@ -106,7 +106,7 @@ def build_task_roots(base: str) -> Dict[str, str]:
 
 def kaggle_task_roots() -> Dict[str, str]:
     return {
-        name: f"/kaggle/input/datasets/{cfg['kaggle_slug']}"
+        name: f"/kaggle/input/{cfg['kaggle_input']}"
         for name, cfg in TASKS.items()
     }
 
@@ -138,10 +138,13 @@ def glob_nii(directory: Path) -> List[Path]:
 
 # ── Dataset verification ───────────────────────────────────────────────────────
 
-def verify_datasets(task_roots: Dict[str, str]) -> bool:
+def verify_datasets(task_roots: Dict[str, str],
+                    required: List[str] = None) -> bool:
+    """Verify only the tasks actually needed. Defaults to all tasks in task_roots."""
     print("\n── Dataset verification ──────────────────────────────────────")
     all_ok = True
-    for task_name in TASK_ORDER:
+    tasks_to_check = required if required is not None else list(task_roots.keys())
+    for task_name in tasks_to_check:
         root = task_roots.get(task_name, "")
         try:
             task_dir = resolve_task_dir(root, task_name)

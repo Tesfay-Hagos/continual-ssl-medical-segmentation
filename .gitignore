@@ -39,3 +39,4 @@ docs/*.fdb_latexmk
 # OS
 .DS_Store
 Thumbs.db
+thesis.pdf
