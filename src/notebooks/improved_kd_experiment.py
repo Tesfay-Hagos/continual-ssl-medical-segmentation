@@ -53,7 +53,7 @@ def _kd_loss(student_logits, teacher_logits, labels, alpha, temperature):
     kd_loss = F.kl_div(s_log, t_soft, reduction="sum") / (student_logits.shape[0] * n_vox)
     kd_loss = kd_loss * (temperature ** 2)
 
-    return (1 - alpha) * task_loss + alpha * kd_loss, task_loss.item(), kd_loss.item()
+    return task_loss + alpha * kd_loss, task_loss.item(), kd_loss.item()
 
 
 def _build_student():
@@ -81,7 +81,7 @@ def _get_or_train_teacher(fold_idx: int, train_loader, val_loader):
         print(f"  Teacher: loaded ssl_only checkpoint (fold {fold_idx+1})")
     else:
         # ssl_only not available — train teacher with SSL init from scratch
-        print(f"  Teacher: ssl_only checkpoint missing, training from SSL init...")
+        print("  Teacher: ssl_only checkpoint missing, training from SSL init...")
         teacher = build_model(pretrained=True)
         result  = finetune(f"teacher_fold{fold_idx+1}", teacher, train_loader, val_loader)
         teacher.load_state_dict(torch.load(result["ckpt"], map_location=DEVICE))
@@ -94,6 +94,46 @@ def _get_or_train_teacher(fold_idx: int, train_loader, val_loader):
 
     print(f"  Teacher params: {sum(p.numel() for p in teacher.parameters()):,} (all frozen)")
     return teacher
+
+
+def _train_one_epoch(student, teacher, train_loader, optimizer, scaler, alpha, T):
+    """Run one training epoch; return (total_loss, task_loss, kd_loss, n_batches)."""
+    student.train()
+    epoch_loss, epoch_task, epoch_kd, n_batches = 0.0, 0.0, 0.0, 0
+
+    for batch in train_loader:
+        if isinstance(batch, list):
+            batch = batch[0]
+
+        imgs   = batch["image"].to(DEVICE)
+        labels = batch["label"].to(DEVICE)
+        if labels.dim() == 4:
+            labels = labels.unsqueeze(1)
+        labels = labels.long()
+
+        optimizer.zero_grad()
+        with torch.amp.autocast(device_type=DEVICE.type):
+            s_logits = student(imgs)
+            with torch.no_grad():
+                t_logits = teacher(imgs)
+            loss, tl, kl = _kd_loss(s_logits, t_logits.detach(), labels, alpha, T)
+
+        if not torch.isfinite(loss):
+            optimizer.zero_grad()
+            continue
+
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
+        scaler.step(optimizer)
+        scaler.update()
+
+        epoch_loss += loss.item()
+        epoch_task += tl
+        epoch_kd   += kl
+        n_batches  += 1
+
+    return epoch_loss, epoch_task, epoch_kd, n_batches
 
 
 def run_kd_variant(fold_idx: int, variant: dict, train_loader, val_loader) -> dict:
@@ -129,7 +169,6 @@ def run_kd_variant(fold_idx: int, variant: dict, train_loader, val_loader) -> di
 
     best_dsc, best_hd95, trigger, start_epoch = 0.0, float("inf"), 0, 0
 
-    # Resume if interrupted
     if resume_ckpt.exists():
         state       = torch.load(resume_ckpt, map_location=DEVICE)
         student.load_state_dict(state["model"])
@@ -142,43 +181,11 @@ def run_kd_variant(fold_idx: int, variant: dict, train_loader, val_loader) -> di
         print(f"  Resumed from epoch {start_epoch}, best_dsc={best_dsc:.4f}")
 
     for epoch in range(start_epoch, TRAIN_CFG["epochs"]):
-        student.train()
-        epoch_loss, epoch_task, epoch_kd, n_batches = 0.0, 0.0, 0.0, 0
-
-        for batch in train_loader:
-            if isinstance(batch, list):
-                batch = batch[0]
-
-            imgs   = batch["image"].to(DEVICE)
-            labels = batch["label"].to(DEVICE)
-            if labels.dim() == 4:
-                labels = labels.unsqueeze(1)
-            labels = labels.long()
-
-            optimizer.zero_grad()
-            with torch.amp.autocast(device_type=DEVICE.type):
-                s_logits = student(imgs)
-                with torch.no_grad():
-                    t_logits = teacher(imgs)
-                loss, tl, kl = _kd_loss(s_logits, t_logits.detach(), labels, alpha, T)
-
-            if not torch.isfinite(loss):
-                optimizer.zero_grad()
-                continue
-
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
-            scaler.step(optimizer)
-            scaler.update()
-
-            epoch_loss += loss.item()
-            epoch_task += tl
-            epoch_kd   += kl
-            n_batches  += 1
+        epoch_loss, epoch_task, epoch_kd, n_batches = _train_one_epoch(
+            student, teacher, train_loader, optimizer, scaler, alpha, T)
 
         scheduler.step()
-        nb = max(n_batches, 1)
+        nb       = max(n_batches, 1)
         metrics  = evaluate(student, val_loader)
         dsc, hd95 = metrics["dice"], metrics["hd95"]
 
@@ -201,7 +208,6 @@ def run_kd_variant(fold_idx: int, variant: dict, train_loader, val_loader) -> di
                 print(f"  Early stopping at epoch {epoch+1}.")
                 break
 
-        # Save resume checkpoint
         torch.save({"model": student.state_dict(), "optimizer": optimizer.state_dict(),
                     "scheduler": scheduler.state_dict(), "epoch": epoch,
                     "best_dsc": best_dsc, "best_hd95": best_hd95,
@@ -214,8 +220,8 @@ def run_kd_variant(fold_idx: int, variant: dict, train_loader, val_loader) -> di
               "ckpt": str(ckpt_dir / "best.pth"), "temperature": T, "alpha": alpha}
     cv_results.setdefault(fold_key, {})[tag] = result
     _save_cv_results()
-    # Push updated cv_results to WandB so next session can restore and skip
-    save_checkpoint(_cv_results_path, "ssl-kd-cv-results", "", "")
+    if USE_WANDB:
+        save_checkpoint(_cv_results_path, "ssl-kd-cv-results", "", "")
     return result
 
 
