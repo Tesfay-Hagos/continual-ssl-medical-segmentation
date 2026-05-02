@@ -105,10 +105,33 @@ def build_task_roots(base: str) -> Dict[str, str]:
 
 
 def kaggle_task_roots() -> Dict[str, str]:
-    return {
-        name: f"/kaggle/input/{cfg['kaggle_input']}"
-        for name, cfg in TASKS.items()
-    }
+    """
+    Return the mount root for each task on Kaggle.
+
+    Kaggle mounts a dataset added as input at /kaggle/input/<dataset-name>/.
+    We try the canonical path first, then a legacy path used by older notebooks,
+    then scan /kaggle/input/ for any directory containing imagesTr/ as a last resort.
+    """
+    roots = {}
+    for name, cfg in TASKS.items():
+        candidates = [
+            f"/kaggle/input/{cfg['kaggle_input']}",               # correct
+            f"/kaggle/input/datasets/{cfg['kaggle_slug']}",        # old broken path (legacy)
+        ]
+        # last resort: scan /kaggle/input/ for a dir that contains imagesTr/
+        try:
+            for entry in os.scandir("/kaggle/input"):
+                if entry.is_dir():
+                    if (os.path.isdir(os.path.join(entry.path, "imagesTr")) or
+                            os.path.isdir(os.path.join(entry.path, cfg["task_folder"], "imagesTr"))):
+                        candidates.append(entry.path)
+        except OSError:
+            pass
+
+        found = next((c for c in candidates if os.path.isdir(c)), candidates[0])
+        print(f"  [{name}] mount → {found}  exists={os.path.isdir(found)}")
+        roots[name] = found
+    return roots
 
 
 _EXT_GZ  = ".nii.gz"
