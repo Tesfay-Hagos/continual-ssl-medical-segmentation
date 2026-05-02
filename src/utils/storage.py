@@ -87,13 +87,17 @@ def wandb_download(artifact_name: str, filename: str,
         try:
             api = wandb.Api()
             art = api.artifact(path)
-            # get_entry is the current API; get_path is deprecated in WandB >= 0.16
-            try:
-                art.get_entry(filename).download(root=str(dest_dir))
-            except AttributeError:
-                art.get_path(filename).download(root=str(dest_dir))
-            print(f"  ✅ Restored {filename} from WandB ({artifact_name})")
-            return True
+            # art.download() handles WandB's internal parquet conversion
+            # and restores the original filename (e.g. ssl_kd_cv_results.json)
+            # regardless of how the artifact is stored internally (0000.parquet etc.)
+            downloaded_dir = art.download(root=str(dest_dir))
+            dest_file = Path(downloaded_dir) / filename
+            if dest_file.exists():
+                if dest_file != dest_dir / filename:
+                    dest_file.rename(dest_dir / filename)
+                print(f"  ✅ Restored {filename} from WandB ({artifact_name})")
+                return True
+            print(f"  ⚠️  Artifact downloaded but {filename} not found inside it")
         except Exception as _e:
             print(f"  ℹ️  WandB restore attempt failed for {path}: {_e}")
             continue

@@ -439,7 +439,10 @@ def finetune(run_name: str, model, train_loader, val_loader,
 
         if dsc >= best_dsc:
             best_dsc, best_hd95 = dsc, hd95
-            torch.save(model.state_dict(), ckpt_dir / _BEST_CKPT)
+            best_ckpt_path = ckpt_dir / _BEST_CKPT
+            torch.save(model.state_dict(), best_ckpt_path)
+            # Upload best checkpoint to WandB so teacher can be loaded after restart
+            save_checkpoint(best_ckpt_path, f"{run_name}-best", "", "")
             trigger = 0
         else:
             trigger += 1
@@ -594,9 +597,14 @@ for fold in range(N_FOLDS):
         try:
             print(f"\n=== Fold {fold+1} — SSL + KD ===")
             teacher = build_model(pretrained=True)
-            teacher.load_state_dict(
-                torch.load(cv_results[fold_key]["ssl_only"]["ckpt"], map_location=DEVICE))
-            teacher.eval()  # Ensure teacher is in eval mode after loading weights
+            ssl_ckpt_path = Path(cv_results[fold_key]["ssl_only"]["ckpt"])
+            if not ssl_ckpt_path.exists():
+                # Local checkpoint lost (session restart) — restore from WandB artifact
+                run_name = cv_results[fold_key]["ssl_only"]["run"]
+                restore_checkpoint(_BEST_CKPT, ssl_ckpt_path.parent,
+                                   f"{run_name}-best", WANDB_PROJECT, "", "")
+            teacher.load_state_dict(torch.load(ssl_ckpt_path, map_location=DEVICE))
+            teacher.eval()
             
             model_kd = build_model(pretrained=True)
             cv_results[fold_key]["ssl_kd"] = finetune(f"ssl_kd_fold{fold+1}", model_kd,
