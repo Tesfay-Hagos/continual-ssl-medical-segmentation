@@ -140,9 +140,17 @@ except Exception as _e:
 # ## 1 — Dataset Setup
 
 # %%
-# HAM10000 paths
+# HAM10000 paths — Kaggle mounts the dataset at one of several locations
+# depending on how it was added (via UI slug vs. full owner/dataset path).
 if ON_KAGGLE:
-    DATA_ROOT = "/kaggle/input/skin-cancer-mnist-ham10000"
+    _candidates = [
+        "/kaggle/input/skin-cancer-mnist-ham10000",               # added by slug
+        "/kaggle/input/datasets/kmader/skin-cancer-mnist-ham10000", # added via full path
+    ]
+    DATA_ROOT = next(
+        (p for p in _candidates if os.path.isdir(p)), _candidates[0]
+    )
+    print(f"Dataset root: {DATA_ROOT}  (exists={os.path.isdir(DATA_ROOT)})")
 else:
     DATA_ROOT = os.environ.get("HAM10000_ROOT", "/data/ham10000")
 
@@ -937,7 +945,7 @@ for fold in range(N_FOLDS):
                            config={**FINETUNE_CFG, "fold": fold+1,
                                    "label_frac": label_frac, "method": "baseline"})
             try:
-                print(f"\n--- Baseline (ImageNet init, labeled only) ---")
+                print("\n--- Baseline (ImageNet init, labeled only) ---")
                 model = build_classifier(pretrained_backbone=True, load_simclr=False)
                 cv_results[fold_key]["baseline"] = finetune(
                     run_name, model, labeled_loader, val_loader)
@@ -956,7 +964,7 @@ for fold in range(N_FOLDS):
                            config={**FINETUNE_CFG, "fold": fold+1,
                                    "label_frac": label_frac, "method": "ssl_only"})
             try:
-                print(f"\n--- SSL-only (SimCLR init, labeled only) ---")
+                print("\n--- SSL-only (SimCLR init, labeled only) ---")
                 model = build_classifier(pretrained_backbone=True, load_simclr=True)
                 cv_results[fold_key]["ssl_only"] = finetune(
                     run_name, model, labeled_loader, val_loader)
@@ -975,7 +983,7 @@ for fold in range(N_FOLDS):
                            config={**FINETUNE_CFG, "fold": fold+1,
                                    "label_frac": label_frac, "method": "ssl_mt"})
             try:
-                print(f"\n--- SSL + Mean Teacher (SimCLR init + unlabeled consistency) ---")
+                print("\n--- SSL + Mean Teacher (SimCLR init + unlabeled consistency) ---")
                 model   = build_classifier(pretrained_backbone=True, load_simclr=True)
                 teacher = build_classifier(pretrained_backbone=True, load_simclr=True)
                 cv_results[fold_key]["ssl_mt"] = finetune(
@@ -988,15 +996,15 @@ for fold in range(N_FOLDS):
         else:
             print(f"Fold {fold+1} {frac_key} ssl_mt already done — skipping.")
 
-        # ── Upper bound (10pct and 20pct only, skip others to save time) ──
-        if label_frac == 0.10 and "upper_bound" not in cv_results[fold_key]:
+        # ── Upper bound (run once at 10 % label fraction per fold) ───────
+        if frac_key == "10pct" and "upper_bound" not in cv_results[fold_key]:
             run_name = f"upper_bound_f{fold+1}"
             if USE_WANDB:
                 wandb.init(project=WANDB_PROJECT, name=run_name, reinit=True,
                            config={**FINETUNE_CFG, "fold": fold+1,
                                    "label_frac": 1.0, "method": "upper_bound"})
             try:
-                print(f"\n--- Upper bound (ImageNet init, all labels) ---")
+                print("\n--- Upper bound (ImageNet init, all labels) ---")
                 ub_loader, _, _ = get_loaders(fold, label_frac=1.0)
                 model = build_classifier(pretrained_backbone=True, load_simclr=False)
                 cv_results[fold_key]["upper_bound"] = finetune(
