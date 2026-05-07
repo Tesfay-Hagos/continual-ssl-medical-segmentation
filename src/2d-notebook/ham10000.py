@@ -1490,26 +1490,25 @@ _paper_figures = {
     "label_fraction_ablation.pdf":"Ablation PDF (for paper)",
 }
 
-if USE_WANDB:
-    try:
-        with wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name="paper-figures",
-                        reinit=True, job_type="figures"):
-            for fname, caption in _paper_figures.items():
-                fpath = FIG_DIR / fname
-                if fpath.exists():
-                    if fname.endswith(".png"):
-                        wandb.log({caption: wandb.Image(str(fpath), caption=caption)})
-                    save_checkpoint(fpath, f"fig-{fpath.stem}", "", "")
-                    print(f"  Uploaded : {fname}")
-                else:
-                    print(f"  Not found: {fname}  (section 10 may not have run yet)")
-        print("All available figures uploaded to WandB.")
-    except Exception as _wb_err:
-        print(f"WandB upload failed: {_wb_err}")
-        print(f"Figures saved locally at: {FIG_DIR}")
-else:
-    print(f"WandB login was not available — figures saved locally at: {FIG_DIR}")
-    print("Check that Kaggle secret 'HAM_10000' contains a valid WandB API key.")
+# Always attempt upload — wandb may have been logged in manually even if
+# the setup cell failed (USE_WANDB could be False from a wrong secret name
+# while wandb itself is authenticated from an interactive prompt).
+try:
+    with wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name="paper-figures",
+                    reinit=True, job_type="figures"):
+        for fname, caption in _paper_figures.items():
+            fpath = FIG_DIR / fname
+            if fpath.exists():
+                if fname.endswith(".png"):
+                    wandb.log({caption: wandb.Image(str(fpath), caption=caption)})
+                save_checkpoint(fpath, f"fig-{fpath.stem}", "", "")
+                print(f"  Uploaded : {fname}")
+            else:
+                print(f"  Not found: {fname}  (section 10 may not have run yet)")
+    print("All available figures uploaded to WandB.")
+except Exception as _wb_err:
+    print(f"WandB upload failed ({_wb_err})")
+    print(f"Figures saved locally at: {FIG_DIR}")
 
 # %%
 print("\n" + "=" * 60)
