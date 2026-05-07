@@ -134,7 +134,7 @@ print(f"Device   : {torch.cuda.get_device_name(0) if torch.cuda.is_available() e
 # v2 = 40-epoch SSL, batch=64, mt_lambda=0.3  (tuned run)
 RUN_VERSION   = "v2"
 OUT_DIR       = f"{OUT_DIR}/{RUN_VERSION}" if not OUT_DIR.endswith(RUN_VERSION) else OUT_DIR
-WANDB_PROJECT = f"ham10000-ssl-{RUN_VERSION}"
+WANDB_PROJECT = "ham10000-ssl"   # single project — runs are grouped by RUN_VERSION inside
 
 os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -586,7 +586,7 @@ else:
     )
 
     if USE_WANDB:
-        wandb.init(project=WANDB_PROJECT, name="simclr-pretrain", reinit=True,
+        wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name="simclr-pretrain", reinit=True,
                    config=SSL_CFG)
 
     best_ssl_loss = float("inf")
@@ -987,7 +987,7 @@ for fold in range(N_FOLDS):
         if "baseline" not in cv_results[fold_key]:
             run_name = f"baseline_f{fold+1}_{frac_key}"
             if USE_WANDB:
-                wandb.init(project=WANDB_PROJECT, name=run_name, reinit=True,
+                wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name=run_name, reinit=True,
                            config={**FINETUNE_CFG, "fold": fold+1,
                                    "label_frac": label_frac, "method": "baseline"})
             try:
@@ -1006,7 +1006,7 @@ for fold in range(N_FOLDS):
         if "ssl_only" not in cv_results[fold_key]:
             run_name = f"ssl_only_f{fold+1}_{frac_key}"
             if USE_WANDB:
-                wandb.init(project=WANDB_PROJECT, name=run_name, reinit=True,
+                wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name=run_name, reinit=True,
                            config={**FINETUNE_CFG, "fold": fold+1,
                                    "label_frac": label_frac, "method": "ssl_only"})
             try:
@@ -1025,7 +1025,7 @@ for fold in range(N_FOLDS):
         if "ssl_mt" not in cv_results[fold_key]:
             run_name = f"ssl_mt_f{fold+1}_{frac_key}"
             if USE_WANDB:
-                wandb.init(project=WANDB_PROJECT, name=run_name, reinit=True,
+                wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name=run_name, reinit=True,
                            config={**FINETUNE_CFG, "fold": fold+1,
                                    "label_frac": label_frac, "method": "ssl_mt"})
             try:
@@ -1046,7 +1046,7 @@ for fold in range(N_FOLDS):
         if frac_key == "10pct" and "upper_bound" not in cv_results[fold_key]:
             run_name = f"upper_bound_f{fold+1}"
             if USE_WANDB:
-                wandb.init(project=WANDB_PROJECT, name=run_name, reinit=True,
+                wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name=run_name, reinit=True,
                            config={**FINETUNE_CFG, "fold": fold+1,
                                    "label_frac": 1.0, "method": "upper_bound"})
             try:
@@ -1476,7 +1476,7 @@ _paper_figures = {
 }
 
 if USE_WANDB:
-    with wandb.init(project=WANDB_PROJECT, name="paper-figures",
+    with wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name="paper-figures",
                     reinit=True, job_type="figures") as run:
         for fname, caption in _paper_figures.items():
             fpath = FIG_DIR / fname
