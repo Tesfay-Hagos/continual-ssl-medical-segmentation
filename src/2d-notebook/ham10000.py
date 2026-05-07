@@ -124,10 +124,21 @@ torch.backends.cudnn.benchmark     = False
 
 print(f"PyTorch  : {torch.__version__}")
 print(f"Device   : {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
+
+# ── Version control ───────────────────────────────────────────────────────────
+# Bump RUN_VERSION to start a completely fresh run:
+#   - new checkpoint directory (old results are never overwritten)
+#   - new WandB project (separate dashboard, separate artifacts)
+#   - all artifact names are versioned automatically
+# v1 = 20-epoch SSL, batch=32, mt_lambda=1.0  (exploratory run)
+# v2 = 40-epoch SSL, batch=64, mt_lambda=0.3  (tuned run)
+RUN_VERSION   = "v2"
+OUT_DIR       = f"{OUT_DIR}/{RUN_VERSION}" if not OUT_DIR.endswith(RUN_VERSION) else OUT_DIR
+WANDB_PROJECT = f"ham10000-ssl-{RUN_VERSION}"
+
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # %%
-WANDB_PROJECT = "ham10000-ssl"
 try:
     if ON_KAGGLE:
         from kaggle_secrets import UserSecretsClient
