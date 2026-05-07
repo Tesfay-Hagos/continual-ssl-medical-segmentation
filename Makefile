@@ -11,10 +11,14 @@ IMP_KD_PY    := src/notebooks/improved_kd_experiment.py
 COMBINED_PY   := src/notebooks/SSL_KD_full.py
 COMBINED_IPYNB := src/notebooks/SSL_KD_full.ipynb
 
+# HAM10000 SSL + Mean Teacher experiment
+HAM_PY    := src/2d-notebook/ham10000.py
+HAM_IPYNB := src/2d-notebook/ham10000.ipynb
+
 -include .env
 export
 
-.PHONY: notebook nb ssl-kd improved-kd combined lint push-nb env-check help
+.PHONY: notebook nb ssl-kd improved-kd combined ham10000 push-nb push-ham lint env-check help
 
 ## Convert kaggle_run.py -> kaggle_run.ipynb
 notebook nb: $(PY_NOTEBOOK)
@@ -78,6 +82,22 @@ push-nb: combined ssl-kd
 	git commit -m "Update Kaggle notebooks (auto-generated from .py sources)"
 	git push
 
+## Convert ham10000.py -> ham10000.ipynb (upload this to Kaggle)
+ham10000: $(HAM_PY)
+	jupytext --update --to notebook $(HAM_PY) -o $(HAM_IPYNB)
+	@python3 -c \
+	  "import json; nb=json.load(open('$(HAM_IPYNB)')); \
+	   cc=[c for c in nb['cells'] if c['cell_type']=='code']; \
+	   mc=[c for c in nb['cells'] if c['cell_type']=='markdown']; \
+	   print(f'OK  $(HAM_IPYNB) updated ({len(cc)} code + {len(mc)} markdown cells)')"
+
+## Convert ham10000.py -> .ipynb, then commit and push both files
+push-ham: ham10000
+	git add $(HAM_PY) $(HAM_IPYNB)
+	git diff --cached --quiet || git commit -m "Update HAM10000 SSL+MeanTeacher notebook (auto-generated)"
+	git push
+	@echo "Pushed $(HAM_PY) + $(HAM_IPYNB) to GitHub."
+
 ## Verify required env vars are set
 env-check:
 	@test -n "$$KAGGLE_API_TOKEN" || (echo "KAGGLE_API_TOKEN not set -- copy .env.example to .env"; exit 1)
@@ -86,13 +106,20 @@ env-check:
 
 help:
 	@echo ""
+	@echo "  HAM10000 experiment (2D RGB classification)"
+	@echo "  make ham10000   Convert ham10000.py -> ham10000.ipynb (upload to Kaggle)"
+	@echo "  make push-ham   ham10000 + git commit + push to GitHub"
+	@echo ""
+	@echo "  3D MRI segmentation (SSL + KD)"
 	@echo "  make combined   *** MAIN TARGET *** Merge SSL_KD.py + improved_kd_experiment.py"
 	@echo "                  into SSL_KD_full.ipynb — upload this single file to Kaggle"
 	@echo "  make ssl-kd     Convert SSL_KD.py -> SSL_KD.ipynb (standalone)"
 	@echo "  make improved-kd Convert improved_kd_experiment.py -> .ipynb (preview only)"
+	@echo "  make push-nb    combined + ssl-kd + git commit + push"
+	@echo ""
+	@echo "  Utilities"
 	@echo "  make notebook   Convert kaggle_run.py -> kaggle_run.ipynb"
 	@echo "  make sync-py    Sync .ipynb outputs back to kaggle_run.py"
 	@echo "  make lint       Dry-run syntax + logic checks on kaggle_run.py"
-	@echo "  make push-nb    combined + ssl-kd + git commit + push"
 	@echo "  make env-check  Verify .env credentials are loaded"
 	@echo ""
