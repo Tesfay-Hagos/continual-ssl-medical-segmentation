@@ -108,6 +108,9 @@ from utils.storage import save_checkpoint, restore_checkpoint, set_wandb_entity
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 SEED   = 42
 
+# Reduce CUDA memory fragmentation (helps on T4 / P100 with limited VRAM)
+os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -180,9 +183,22 @@ metadata["label"] = metadata["dx"].map(LABEL_MAP)
 assert metadata["label"].notna().all(), "Unknown class found in metadata"
 
 print(f"Total unique images : {len(metadata)}")
+
+# ── Stratified 3,000-image subset ────────────────────────────────────────────
+# Keeps class proportions identical to the full dataset.
+# Used for all training; SSL pretraining also uses only these 3K images.
+# This fits comfortably on a T4 (15 GB) and trains in ~2.5 h.
+SUBSET_SIZE = 3_000
+metadata = (metadata.groupby("label", group_keys=False, observed=True)
+            .apply(lambda g: g.sample(
+                max(1, round(len(g) / len(metadata) * SUBSET_SIZE)),
+                random_state=SEED))
+            .reset_index(drop=True))
+print(f"Subset size         : {len(metadata)}  (stratified from full 10,015)")
+
 print(f"Classes ({NUM_CLASSES})         : {CLASS_NAMES}")
-print("\nClass distribution:")
-for cls, grp in metadata.groupby("dx"):
+print("\nClass distribution (subset):")
+for cls, grp in metadata.groupby("dx", observed=True):
     n   = len(grp)
     pct = n / len(metadata) * 100
     print(f"  {cls:<8} {n:>5}  ({pct:.1f}%)")
@@ -295,9 +311,9 @@ print(f"Saved → {FIG_DIR / 'eda_demographics.png'}")
 
 # %%
 print("\n" + "=" * 55)
-print("  EDA Summary — HAM10000")
+print("  EDA Summary — HAM10000 (3K stratified subset)")
 print("=" * 55)
-print(f"  Total images    : {len(metadata)}")
+print(f"  Subset images   : {len(metadata)}  (of 10,015 total)")
 print(f"  Classes         : {NUM_CLASSES}")
 print(f"  Majority class  : nv  ({counts['nv']}, {counts['nv']/len(metadata)*100:.1f}%)")
 print(f"  Minority class  : df  ({counts['df']}, {counts['df']/len(metadata)*100:.1f}%)")
@@ -316,8 +332,10 @@ _MEAN = [0.485, 0.456, 0.406]
 _STD  = [0.229, 0.224, 0.225]
 
 # Standard supervised transforms
+IMG_SIZE = 160   # reduced from 224 to cut activation memory by ~50 % on T4
+
 TRAIN_TRANSFORM = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+    transforms.RandomResizedCrop(IMG_SIZE, scale=(0.7, 1.0)),
     transforms.RandomHorizontalFlip(),
     transforms.RandomVerticalFlip(),
     transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.1),
@@ -326,22 +344,22 @@ TRAIN_TRANSFORM = transforms.Compose([
 ])
 
 VAL_TRANSFORM = transforms.Compose([
-    transforms.Resize(256),
-    transforms.CenterCrop(224),
+    transforms.Resize(int(IMG_SIZE * 1.14)),   # 182 → centre-crop to 160
+    transforms.CenterCrop(IMG_SIZE),
     transforms.ToTensor(),
     transforms.Normalize(_MEAN, _STD),
 ])
 
 # SimCLR augmentation (stronger — two independent views)
 SSL_TRANSFORM = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.2, 1.0)),
+    transforms.RandomResizedCrop(IMG_SIZE, scale=(0.2, 1.0)),
     transforms.RandomHorizontalFlip(),
     transforms.RandomApply(
         [transforms.ColorJitter(brightness=0.8, contrast=0.8,
                                 saturation=0.8, hue=0.2)], p=0.8),
     transforms.RandomGrayscale(p=0.2),
-    transforms.RandomApply([transforms.GaussianBlur(kernel_size=23, sigma=(0.1, 2.0))],
-                           p=0.5),
+    transforms.RandomApply([transforms.GaussianBlur(kernel_size=15, sigma=(0.1, 2.0))],
+                           p=0.5),   # kernel scaled proportionally to IMG_SIZE
     transforms.ToTensor(),
     transforms.Normalize(_MEAN, _STD),
 ])
@@ -502,8 +520,8 @@ finally:
 
 # %%
 SSL_CFG = {
-    "epochs":      50,
-    "batch_size":  128,
+    "epochs":      20,    # reduced from 50 (3K subset needs fewer epochs)
+    "batch_size":  32,    # reduced from 128 to fit T4 VRAM
     "lr":          3e-4,
     "weight_decay": 1e-6,
     "temperature": 0.5,
@@ -595,25 +613,32 @@ else:
     if USE_WANDB and wandb.run is not None:
         wandb.finish()
 
+# Free GPU memory before fine-tuning phase
+if DEVICE.type == "cuda":
+    torch.cuda.empty_cache()
+    print(f"GPU memory after SSL: "
+          f"{torch.cuda.memory_allocated()/1e9:.2f} GB allocated, "
+          f"{torch.cuda.memory_reserved()/1e9:.2f} GB reserved")
+
 # %% [markdown]
 # ## 5 — Shared Training Helpers
 
 # %%
 FINETUNE_CFG = {
-    "epochs":        30,
-    "warmup_epochs":  3,
-    "batch_size":    32,
+    "epochs":        20,    # reduced from 30
+    "warmup_epochs":  2,
+    "batch_size":    16,    # reduced from 32 to fit T4 VRAM
     "lr":           2e-4,
     "weight_decay": 1e-4,
-    "patience":     10,
+    "patience":      8,
     "num_workers":  4 if ON_KAGGLE else 0,
     # Mean Teacher
     "ema_alpha":    0.999,
-    "mt_lambda":    1.0,    # weight of consistency loss
-    "mt_rampup":    10,     # epochs to ramp λ from 0 → mt_lambda
+    "mt_lambda":    1.0,
+    "mt_rampup":     8,     # ramp over first 8 epochs
 }
 
-LABEL_FRACTIONS = [0.01, 0.05, 0.10, 0.20]
+LABEL_FRACTIONS = [0.05, 0.10, 0.20]   # dropped 1 % (too few samples at 3K subset)
 N_FOLDS         = 3
 
 
