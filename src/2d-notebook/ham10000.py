@@ -1421,14 +1421,29 @@ try:
                     continue
                 img_t = VAL_TRANSFORM(Image.open(path).convert("RGB"))
 
-                pred  = model(img_t.unsqueeze(0).to(DEVICE)).argmax(1).item()
+                pred = model(img_t.unsqueeze(0).to(DEVICE)).argmax(1).item()
                 try:
+                    # guided=True gives sharper, more interpretable maps than vanilla
                     grads = bp.calculate_gradients(
-                        img_t.unsqueeze(0), target_class=pred, guided=False)
-                    grad_np = grads[0].abs().mean(0).numpy() if grads is not None \
-                        else np.zeros(img_t.shape[1:])
-                except Exception:
-                    grad_np = np.zeros(img_t.shape[1:])
+                        img_t.unsqueeze(0), target_class=pred, guided=True)
+                    if grads is not None:
+                        grad_np = grads[0].abs().mean(0).detach().cpu().numpy()
+                        # Percentile normalization — prevents black maps from tiny gradients
+                        p_lo, p_hi = np.percentile(grad_np, [1, 99])
+                        grad_np = np.clip(
+                            (grad_np - p_lo) / (p_hi - p_lo + 1e-8), 0, 1)
+                    else:
+                        grad_np = np.zeros(img_t.shape[1:])
+                except Exception as _ft_e:
+                    print(f"    FlashTorch error ({mkey}): {_ft_e}")
+                    # Fallback: manual vanilla gradient — always works
+                    _inp = img_t.unsqueeze(0).to(DEVICE).requires_grad_(True)
+                    model.zero_grad()
+                    model(_inp)[0, pred].backward()
+                    grad_np = _inp.grad[0].abs().mean(0).detach().cpu().numpy()
+                    p_lo, p_hi = np.percentile(grad_np, [1, 99])
+                    grad_np = np.clip(
+                        (grad_np - p_lo) / (p_hi - p_lo + 1e-8), 0, 1)
 
                 col_i = col_pair * 2
                 col_g = col_pair * 2 + 1
@@ -1476,21 +1491,25 @@ _paper_figures = {
 }
 
 if USE_WANDB:
-    with wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name="paper-figures",
-                    reinit=True, job_type="figures") as run:
-        for fname, caption in _paper_figures.items():
-            fpath = FIG_DIR / fname
-            if fpath.exists():
-                # Log as WandB Image (PNG) or artifact (PDF)
-                if fname.endswith(".png"):
-                    wandb.log({caption: wandb.Image(str(fpath), caption=caption)})
-                save_checkpoint(fpath, f"fig-{fpath.stem}", "", "")
-                print(f"  Uploaded: {fname}")
-            else:
-                print(f"  Skipped (not found): {fname}")
-    print("All available figures uploaded to WandB.")
+    try:
+        with wandb.init(project=WANDB_PROJECT, group=RUN_VERSION, name="paper-figures",
+                        reinit=True, job_type="figures"):
+            for fname, caption in _paper_figures.items():
+                fpath = FIG_DIR / fname
+                if fpath.exists():
+                    if fname.endswith(".png"):
+                        wandb.log({caption: wandb.Image(str(fpath), caption=caption)})
+                    save_checkpoint(fpath, f"fig-{fpath.stem}", "", "")
+                    print(f"  Uploaded : {fname}")
+                else:
+                    print(f"  Not found: {fname}  (section 10 may not have run yet)")
+        print("All available figures uploaded to WandB.")
+    except Exception as _wb_err:
+        print(f"WandB upload failed: {_wb_err}")
+        print(f"Figures saved locally at: {FIG_DIR}")
 else:
-    print(f"WandB not available. Figures saved locally at: {FIG_DIR}")
+    print(f"WandB login was not available — figures saved locally at: {FIG_DIR}")
+    print("Check that Kaggle secret 'HAM_10000' contains a valid WandB API key.")
 
 # %%
 print("\n" + "=" * 60)
