@@ -39,7 +39,11 @@ import subprocess
 import json
 import copy
 import random
+import warnings
 from pathlib import Path
+
+# Suppress pandas FutureWarning for groupby.apply with grouping columns
+warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
 ON_KAGGLE = os.path.exists("/kaggle/working")
 
@@ -923,22 +927,27 @@ def get_loaders(fold_idx: int, label_frac: float):
     labeled_df   = _sampled.reset_index(drop=True)
     unlabeled_df = train_df.drop(_sampled.index, errors="ignore").reset_index(drop=True)
 
-    labeled_ds   = HAM10000Dataset(labeled_df,   transform=TRAIN_TRANSFORM)
-    unlabeled_ds = HAM10000Dataset(unlabeled_df, transform=TRAIN_TRANSFORM)
-    val_ds       = HAM10000Dataset(val_df,       transform=VAL_TRANSFORM)
+    labeled_ds = HAM10000Dataset(labeled_df, transform=TRAIN_TRANSFORM)
+    val_ds     = HAM10000Dataset(val_df,     transform=VAL_TRANSFORM)
 
     sampler      = make_weighted_sampler(labeled_df)
-    labeled_loader   = DataLoader(labeled_ds,   batch_size=FINETUNE_CFG["batch_size"],
-                                  sampler=sampler,
-                                  num_workers=FINETUNE_CFG["num_workers"],
-                                  pin_memory=(DEVICE.type == "cuda"))
-    unlabeled_loader = DataLoader(unlabeled_ds, batch_size=FINETUNE_CFG["batch_size"],
-                                  shuffle=True,
-                                  num_workers=FINETUNE_CFG["num_workers"],
-                                  pin_memory=(DEVICE.type == "cuda"),
-                                  drop_last=True)
-    val_loader       = DataLoader(val_ds, batch_size=64, shuffle=False,
-                                  num_workers=FINETUNE_CFG["num_workers"])
+    labeled_loader = DataLoader(labeled_ds, batch_size=FINETUNE_CFG["batch_size"],
+                                sampler=sampler,
+                                num_workers=FINETUNE_CFG["num_workers"],
+                                pin_memory=(DEVICE.type == "cuda"))
+    val_loader     = DataLoader(val_ds, batch_size=64, shuffle=False,
+                                num_workers=FINETUNE_CFG["num_workers"])
+
+    # unlabeled_loader is None when label_frac=1.0 (upper bound — no unlabeled data)
+    if len(unlabeled_df) > 0:
+        unlabeled_ds     = HAM10000Dataset(unlabeled_df, transform=TRAIN_TRANSFORM)
+        unlabeled_loader = DataLoader(unlabeled_ds, batch_size=FINETUNE_CFG["batch_size"],
+                                      shuffle=True,
+                                      num_workers=FINETUNE_CFG["num_workers"],
+                                      pin_memory=(DEVICE.type == "cuda"),
+                                      drop_last=True)
+    else:
+        unlabeled_loader = None
 
     print(f"  Fold {fold_idx+1}  label_frac={label_frac:.0%}  "
           f"labeled={len(labeled_df)}  unlabeled={len(unlabeled_df)}  "
