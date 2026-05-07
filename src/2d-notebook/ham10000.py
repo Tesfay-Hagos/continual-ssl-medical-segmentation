@@ -26,7 +26,7 @@
 # ### Before running on Kaggle
 # 1. Add dataset: `kmader/skin-cancer-mnist-ham10000`
 # 2. Enable GPU (T4 or P100)
-# 3. Add Kaggle secret: `HAM10000_WANDB`
+# 3. Add Kaggle secret: `HAM_10000`
 # 4. Run all cells top-to-bottom
 
 # %% [markdown]
@@ -142,7 +142,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 try:
     if ON_KAGGLE:
         from kaggle_secrets import UserSecretsClient
-        _key = UserSecretsClient().get_secret("HAM10000_WANDB")
+        _key = UserSecretsClient().get_secret("HAM_10000")
         wandb.login(key=_key)
     else:
         wandb.login()
