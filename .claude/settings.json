@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(make ham10000 *)"
+      "Bash(make ham10000 *)",
+      "Bash(python -m py_compile src/2d-notebook/ham10000.py)",
+      "Bash(make push-ham *)"
     ]
   }
 }
