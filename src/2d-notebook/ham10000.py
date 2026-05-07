@@ -629,17 +629,18 @@ if DEVICE.type == "cuda":
 
 # %%
 FINETUNE_CFG = {
-    "epochs":        20,    # reduced from 30
+    "epochs":        25,    # extra 5 epochs — MT needs more time to benefit
     "warmup_epochs":  2,
     "batch_size":    16,    # reduced from 32 to fit T4 VRAM
     "lr":           2e-4,
     "weight_decay": 1e-4,
-    "patience":      8,
+    "patience":     12,     # more patience — MT gains come late in training
     "num_workers":  4 if ON_KAGGLE else 0,
-    # Mean Teacher
+    # Mean Teacher — λ=0.3 avoids consistency loss overwhelming supervised signal
+    # when the teacher is still noisy early in training
     "ema_alpha":    0.999,
-    "mt_lambda":    1.0,
-    "mt_rampup":     8,     # ramp over first 8 epochs
+    "mt_lambda":    0.3,    # reduced from 1.0 — supervised loss stays dominant
+    "mt_rampup":    15,     # slower ramp (was 8) — teacher needs time to stabilise
 }
 
 LABEL_FRACTIONS = [0.05, 0.10, 0.20]   # dropped 1 % (too few samples at 3K subset)
