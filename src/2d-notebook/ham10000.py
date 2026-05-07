@@ -520,8 +520,8 @@ finally:
 
 # %%
 SSL_CFG = {
-    "epochs":      20,    # reduced from 50 (3K subset needs fewer epochs)
-    "batch_size":  32,    # reduced from 128 to fit T4 VRAM
+    "epochs":      40,    # 40 epochs gives ~37K steps on 3K subset — enough to plateau
+    "batch_size":  64,    # 64 doubles negatives per step vs 32 (better contrastive signal)
     "lr":          3e-4,
     "weight_decay": 1e-6,
     "temperature": 0.5,
